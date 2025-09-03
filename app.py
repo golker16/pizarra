@@ -1,6 +1,5 @@
 # app.py
 
-```python
 import sys, os, json, shutil, uuid, time, pathlib, math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -939,7 +938,6 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
-```
 
 
 
