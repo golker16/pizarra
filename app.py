@@ -1,12 +1,10 @@
-# app.py
-
-import sys, os, json, shutil, uuid, time, pathlib, math
+import sys, os, json, shutil, uuid, time, pathlib
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QRectF, QPointF, QTimer, Signal, QUrl, QObject
+from PySide6.QtCore import Qt, QRectF, QPointF, Signal, QUrl, QObject
 from PySide6.QtGui import (
-    QAction, QBrush, QColor, QFont, QGuiApplication, QKeySequence, QPixmap, QPainterPath, QPen
+    QAction, QBrush, QColor, QFont, QGuiApplication, QKeySequence, QPixmap, QPen
 )
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QStatusBar, QLabel, QToolBar, QStyle,
@@ -15,6 +13,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QPushButton, QSlider, QMessageBox
 )
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PySide6.QtGui import QTextCursor
+from PySide6.QtGui import QDesktopServices
 
 # ------------------ Tema oscuro ------------------
 try:
@@ -45,6 +45,19 @@ def copy_into_assets(src_path: str) -> str:
     except Exception as e:
         print("[assets] copy error:", e)
         return ""
+
+def open_in_explorer(abs_path: str):
+    """Abre el explorador en la carpeta (y selecciona el archivo en Windows si es posible)."""
+    try:
+        if not abs_path or not os.path.exists(abs_path):
+            return
+        if sys.platform.startswith("win"):
+            # Seleccionar el archivo
+            os.system(f'explorer /select,"{abs_path}"')
+        else:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(abs_path)))
+    except Exception as e:
+        print("[open] error:", e)
 
 # ------------------ Modelo ------------------
 @dataclass
@@ -88,7 +101,7 @@ class Project:
 def empty_project() -> Project:
     root_id = new_id()
     root = Board(id=root_id, title="Raíz")
-    return Project(version=5, project_id=new_id(), root_board_id=root_id, boards={root_id: root})
+    return Project(version=6, project_id=new_id(), root_board_id=root_id, boards={root_id: root})
 
 def save_project(p: Project, path: str = AUTOSAVE_JSON) -> None:
     os.makedirs(APP_DIR, exist_ok=True)
@@ -137,48 +150,47 @@ def load_project(path: str = AUTOSAVE_JSON) -> Project:
             )
         boards[bid] = Board(id=bd["id"], title=bd.get("title","Pizarra"),
                             items_order=bd.get("items_order", list(items.keys())), items=items)
-    return Project(version=int(data.get("version",5)), project_id=data.get("project_id", new_id()),
+    return Project(version=int(data.get("version",6)), project_id=data.get("project_id", new_id()),
                    root_board_id=data["root_board_id"], boards=boards,
                    last_opened=float(data.get("last_opened", time.time())))
 
-# ------------------ Popup (emojis / formato) ------------------
+# ------------------ Popup emojis / formato ------------------
 class PalettePopup(QWidget):
-    """Pequeño popup que aparece sobre el texto en edición.
-       - Sin selección: 8 emojis para insertar (al final).
-       - Con selección: botones B / I para aplicar a TODO el texto (MVP)."""
+    """Popup que aparece sobre el recuadro de texto:
+       - Sin selección: 8 emojis (incluye ✅ ❌)
+       - Con selección: B / I (negrita / cursiva)
+    """
     def __init__(self, parent=None):
         super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setWindowFlag(Qt.NoDropShadowWindowHint, True)
-        self.setStyleSheet("background:rgba(40,40,40,0.95); border-radius:8px;")
+        self.setStyleSheet("background:rgba(40,40,40,0.96); border-radius:8px;")
         self.lay = QHBoxLayout(self); self.lay.setContentsMargins(8,8,8,8); self.lay.setSpacing(8)
         self.active_item: Optional[QGraphicsTextItem] = None
-        self._mode = "emoji"
-        self._build_emoji()
 
     def _clear(self):
         while self.lay.count():
             w = self.lay.takeAt(0).widget()
             if w: w.setParent(None)
 
-    def _build_emoji(self):
+    def build_emoji(self):
         self._clear()
         for ch in ["😀","😎","🤔","🚀","❤️","👍","✅","❌"]:
             b = QPushButton(ch, self); b.setFixedSize(28,28); b.clicked.connect(lambda _=False, c=ch: self._insert_emoji(c))
             self.lay.addWidget(b)
-        self._mode = "emoji"
 
-    def _build_format(self):
+    def build_format(self):
         self._clear()
         b = QPushButton("B", self); b.setFixedSize(28,28); b.clicked.connect(lambda: self._apply_format(bold=True))
         i = QPushButton("I", self); i.setFixedSize(28,28); i.clicked.connect(lambda: self._apply_format(italic=True))
         self.lay.addWidget(b); self.lay.addWidget(i)
-        self._mode = "format"
 
     def _insert_emoji(self, ch: str):
         if not self.active_item: return
-        txt = self.active_item.toPlainText() + ch
-        self.active_item.setPlainText(txt)
+        cur = self.active_item.textCursor() if hasattr(self.active_item, "textCursor") else None
+        if cur and cur.hasSelection():
+            cur.clearSelection()
+            self.active_item.setTextCursor(cur)
+        self.active_item.setPlainText(self.active_item.toPlainText() + ch)
 
     def _apply_format(self, bold: bool=False, italic: bool=False):
         if not self.active_item: return
@@ -187,21 +199,19 @@ class PalettePopup(QWidget):
         if italic: f.setItalic(not f.italic())
         self.active_item.setFont(f)
 
-    def show_for(self, item: QGraphicsTextItem, scene_pos: QPointF, has_selection: bool):
-        self.active_item = item
-        if has_selection: self._build_format()
-        else: self._build_emoji()
-        p = self.parent()  # MainWindow
-        # posicionar justo arriba del punto dado
-        g = p.mapToGlobal(p.mapFromGlobal(p.cursor().pos()))
-        # mejor: usar la posición de la escena convertida a global
-        view = p.view
-        view_pt = view.mapFromScene(scene_pos)
+    def show_above_note(self, text_item: QGraphicsTextItem, note_scene_rect: QRectF, show_format: bool, main_win: "MainWindow"):
+        self.active_item = text_item
+        if show_format: self.build_format()
+        else: self.build_emoji()
+        # Posicionar centrado arriba del recuadro (no encima del texto)
+        view = main_win.view
+        top_center = note_scene_rect.center(); top_center.setY(note_scene_rect.top() - 8)
+        view_pt = view.mapFromScene(top_center)
         global_pt = view.viewport().mapToGlobal(view_pt)
-        self.move(global_pt.x()-self.width()//2, global_pt.y()-self.height()-10)
+        self.move(global_pt.x() - self.width()//2, global_pt.y() - self.height())
         self.show()
 
-# ------------------ Graphics Items (QObject + QGraphicsRectItem) ------------------
+# ------------------ Items base ------------------
 class BaseNoteItem(QObject, QGraphicsRectItem):
     request_open_child = Signal(str)      # idea -> abrir subpizarra
     request_delete = Signal(str)
@@ -226,7 +236,7 @@ class BaseNoteItem(QObject, QGraphicsRectItem):
         self.setAcceptHoverEvents(True)
         self._hovering = False
 
-    # Contorno transparente; sólo marca en hover/selección
+    # contorno invisible; sólo en hover/selección
     def paint(self, painter, option, widget=None):
         painter.setBrush(Qt.NoBrush)
         if self.isSelected() or self._hovering:
@@ -242,22 +252,23 @@ class BaseNoteItem(QObject, QGraphicsRectItem):
         if change == QGraphicsRectItem.ItemPositionHasChanged:
             self.note.pos = (self.pos().x(), self.pos().y())
             self.request_dirty.emit()
+        if change == QGraphicsRectItem.ItemSelectedHasChanged:
+            self.on_selected(bool(value))
         return super().itemChange(change, value)
 
+    def on_selected(self, selected: bool):
+        """Subclases pueden implementar para mostrar/ocultar sus 'handles'."""
+        pass
+
     def mouseReleaseEvent(self, event):
-        # anidar sobre IDEA si hay solapamiento suficiente
+        # anidar sobre IDEA si el centro cae en una IDEA (evita duplicados raros)
         scene = self.scene()
         if scene:
-            my_rect = self.mapToScene(self.boundingRect()).boundingRect()
-            for it in scene.items(event.scenePos()):
+            items = scene.items(event.scenePos())
+            for it in items:
                 if isinstance(it, BaseNoteItem) and it is not self and it.note.type == "idea":
-                    other_rect = it.mapToScene(it.boundingRect()).boundingRect()
-                    inter = my_rect.intersected(other_rect)
-                    if not inter.isEmpty():
-                        area_ratio = (inter.width()*inter.height())/(my_rect.width()*my_rect.height())
-                        if area_ratio >= 0.35:
-                            self.request_nest_into.emit(self.note.id, it.note.id)
-                            break
+                    self.request_nest_into.emit(self.note.id, it.note.id)
+                    break
         super().mouseReleaseEvent(event)
 
     def _common_menu(self, with_open: bool):
@@ -270,7 +281,7 @@ class BaseNoteItem(QObject, QGraphicsRectItem):
         act_copy = menu.addAction("Copiar")
         return menu, act_edit, act_open, act_del, act_cut, act_copy
 
-# ---- IDEA (resizable “PowerPoint” con handle) ----
+# ---- IDEA (resizable con handle visible sólo si está seleccionada) ----
 class IdeaNoteItem(BaseNoteItem):
     HANDLE = 12
     def __init__(self, note: Note):
@@ -287,7 +298,7 @@ class IdeaNoteItem(BaseNoteItem):
         self.subtitle_item.setFont(f2); self.subtitle_item.setDefaultTextColor(QColor("#cccccc"))
         self.subtitle_item.setTextInteractionFlags(Qt.TextEditorInteraction); self.subtitle_item.setPos(8,34)
 
-        self.handle = QGraphicsRectItem(self); self._reposition_handle()
+        self.handle = QGraphicsRectItem(self); self._reposition_handle(); self.handle.setVisible(False)
 
     def _reposition_handle(self):
         r = self.rect()
@@ -296,8 +307,11 @@ class IdeaNoteItem(BaseNoteItem):
         self.handle.setFlags(QGraphicsRectItem.ItemIgnoresTransformations)
         self.handle.setZValue(self.zValue()+1)
 
+    def on_selected(self, selected: bool):
+        self.handle.setVisible(selected)
+
     def mousePressEvent(self, event):
-        self._resizing = self.handle.contains(self.mapFromScene(event.scenePos()))
+        self._resizing = self.handle.isVisible() and self.handle.contains(self.mapFromScene(event.scenePos()))
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -333,7 +347,7 @@ class IdeaNoteItem(BaseNoteItem):
 
     def mouseDoubleClickEvent(self, event): self.request_open_child.emit(self.note.id)
 
-# ---- TEXTO (resizable + “palette” emojis/B/I) ----
+# ---- TEXTO ----
 class TextoNoteItem(BaseNoteItem):
     HANDLE = 12
     def __init__(self, note: Note, palette_cb=None):
@@ -346,8 +360,8 @@ class TextoNoteItem(BaseNoteItem):
         f = QFont(); f.setPointSize(max(6, note.payload.font_pt)); self.body_item.setFont(f)
         self._apply_text_width()
 
-        self.handle = QGraphicsRectItem(self); self._reposition_handle()
-        self.palette_cb = palette_cb  # fn(item, scene_pos, has_selection)
+        self.handle = QGraphicsRectItem(self); self._reposition_handle(); self.handle.setVisible(False)
+        self.palette_cb = palette_cb  # fn(text_item, note_scene_rect, show_format)
 
     def _reposition_handle(self):
         r = self.rect()
@@ -361,18 +375,22 @@ class TextoNoteItem(BaseNoteItem):
         self.body_item.setTextWidth(w)
         self.body_item.setPos(self._pad, self._pad)
 
-    def mousePressEvent(self, event):
-        self._resizing = self.handle.contains(self.mapFromScene(event.scenePos()))
-        # mostrar palette justo encima del click sobre texto
-        if not self._resizing and self.palette_cb:
-            self.palette_cb(self.body_item, event.scenePos(), has_selection=False)
-        super().mousePressEvent(event)
+    def on_selected(self, selected: bool):
+        self.handle.setVisible(selected)
 
-    def mouseDoubleClickEvent(self, event):
-        # si doble clic y hay selección, mostramos formato
-        if self.palette_cb:
-            self.palette_cb(self.body_item, event.scenePos(), has_selection=True)
-        super().mouseDoubleClickEvent(event)
+    def mousePressEvent(self, event):
+        self._resizing = self.handle.isVisible() and self.handle.contains(self.mapFromScene(event.scenePos()))
+        # mostrar popup arriba del recuadro (emojis por defecto)
+        if not self._resizing and self.palette_cb:
+            scene_rect = self.mapToScene(self.boundingRect()).boundingRect()
+            # Si al presionar ya había selección, mostramos formato
+            show_fmt = False
+            if hasattr(self.body_item, "textCursor"):
+                cur = self.body_item.textCursor()
+                if isinstance(cur, QTextCursor) and cur.hasSelection():
+                    show_fmt = True
+            self.palette_cb(self.body_item, scene_rect, show_format=show_fmt)
+        super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         if self._resizing:
@@ -389,6 +407,12 @@ class TextoNoteItem(BaseNoteItem):
 
     def mouseReleaseEvent(self, event):
         self._resizing = False
+        # Si hay selección al soltar, cambiar a modo formato
+        if self.palette_cb and hasattr(self.body_item, "textCursor"):
+            cur = self.body_item.textCursor()
+            if isinstance(cur, QTextCursor) and cur.hasSelection():
+                scene_rect = self.mapToScene(self.boundingRect()).boundingRect()
+                self.palette_cb(self.body_item, scene_rect, show_format=True)
         super().mouseReleaseEvent(event)
 
     def contextMenuEvent(self, event):
@@ -418,36 +442,33 @@ class TextoNoteItem(BaseNoteItem):
         self.request_dirty.emit()
         super().focusOutEvent(event)
 
-# ---- IMAGEN (resizable real + contorno ajustado) ----
+# ---- IMAGEN ----
 class ImageNoteItem(BaseNoteItem):
     HANDLE = 12
     def __init__(self, note: Note):
         super().__init__(note)
         self._resizing = False
-        self._label = QGraphicsTextItem("Imagen", self)
-        self._label.setDefaultTextColor(QColor("#aaaaaa"))
-        self._label.setPos(4, -18)
         self.pix_item = QGraphicsPixmapItem(self)
         self._reload_pixmap()
-        self.handle = QGraphicsRectItem(self); self._reposition_handle()
+        self.handle = QGraphicsRectItem(self); self._reposition_handle(); self.handle.setVisible(False)
 
     def _reload_pixmap(self):
+        # Ajustar rect a la imagen + padding corto
+        pad = 4
         if self.note.payload.image_asset:
             abs_path = os.path.join(ASSETS_DIR, self.note.payload.image_asset)
             if os.path.exists(abs_path):
-                # Ajustamos el rect a “tamaño real” del contenido con poco padding
-                pad = 4
-                target_w = max(64, int(self.note.size[0]))
-                target_h = max(64, int(self.note.size[1]))
                 pm = QPixmap(abs_path)
                 if not pm.isNull():
-                    scaled = pm.scaled(target_w-2*pad, target_h-2*pad, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    target_w = max(64, int(self.note.size[0])) - 2*pad
+                    target_h = max(64, int(self.note.size[1])) - 2*pad
+                    scaled = pm.scaled(target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                     self.pix_item.setPixmap(scaled)
-                    # El rect se ajusta a la imagen + padding corto
                     self.setRect(QRectF(0,0, scaled.width()+2*pad, scaled.height()+2*pad))
                     self.pix_item.setPos(pad, pad)
-        else:
-            self.setRect(QRectF(0,0,180,120))
+                    return
+        # fallback
+        self.setRect(QRectF(0,0,180,120))
 
     def _reposition_handle(self):
         r = self.rect()
@@ -456,8 +477,11 @@ class ImageNoteItem(BaseNoteItem):
         self.handle.setFlags(QGraphicsRectItem.ItemIgnoresTransformations)
         self.handle.setZValue(self.zValue()+1)
 
+    def on_selected(self, selected: bool):
+        self.handle.setVisible(selected)
+
     def mousePressEvent(self, event):
-        self._resizing = self.handle.contains(self.mapFromScene(event.scenePos()))
+        self._resizing = self.handle.isVisible() and self.handle.contains(self.mapFromScene(event.scenePos()))
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -479,15 +503,20 @@ class ImageNoteItem(BaseNoteItem):
 
     def contextMenuEvent(self, event):
         menu = QMenu()
+        act_open = menu.addAction("Abrir ubicación")
+        menu.addSeparator()
         act_del = menu.addAction("Eliminar")
         act_cut = menu.addAction("Cortar")
         act_copy = menu.addAction("Copiar")
         chosen = menu.exec(event.screenPos())
-        if chosen == act_del: self.request_delete.emit(self.note.id)
+        if chosen == act_open:
+            abs_path = os.path.join(ASSETS_DIR, self.note.payload.image_asset) if self.note.payload.image_asset else ""
+            open_in_explorer(abs_path)
+        elif chosen == act_del: self.request_delete.emit(self.note.id)
         elif chosen == act_copy: self.request_copy.emit(self.note.id)
         elif chosen == act_cut: self.request_cut.emit(self.note.id)
 
-# ---- AUDIO (menú eliminar; sin duplicación al mover) ----
+# ---- AUDIO ----
 class AudioWidget(QWidget):
     def __init__(self, abs_audio_path: str, init_volume: int = 100, parent=None):
         super().__init__(parent)
@@ -510,32 +539,23 @@ class AudioWidget(QWidget):
 class AudioNoteItem(BaseNoteItem):
     def __init__(self, note: Note):
         super().__init__(note)
-        self._dragging = False
-        self._label = QGraphicsTextItem("Audio", self); self._label.setDefaultTextColor(QColor("#aaaaaa")); self._label.setPos(4, -18)
         abs_path = os.path.join(ASSETS_DIR, note.payload.audio_asset) if note.payload.audio_asset else ""
         self.widget = AudioWidget(abs_path, note.payload.volume)
         self.proxy = QGraphicsProxyWidget(self); self.proxy.setWidget(self.widget); self.proxy.setPos(8,8)
         self.setRect(QRectF(0,0,max(260, self.proxy.size().width()+16), max(90, self.proxy.size().height()+16)))
 
-    def mousePressEvent(self, event):
-        self._dragging = True
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        self._dragging = False
-        self.request_dirty.emit()  # guardar tras mover
-        super().mouseReleaseEvent(event)
-
     def contextMenuEvent(self, event):
         menu = QMenu()
+        act_open = menu.addAction("Abrir ubicación")
+        menu.addSeparator()
         act_del = menu.addAction("Eliminar")
         act_cut = menu.addAction("Cortar")
         act_copy = menu.addAction("Copiar")
         chosen = menu.exec(event.screenPos())
-        if chosen == act_del: self.request_delete.emit(self.note.id)
+        if chosen == act_open:
+            abs_path = os.path.join(ASSETS_DIR, self.note.payload.audio_asset) if self.note.payload.audio_asset else ""
+            open_in_explorer(abs_path)
+        elif chosen == act_del: self.request_delete.emit(self.note.id)
         elif chosen == act_copy: self.request_copy.emit(self.note.id)
         elif chosen == act_cut: self.request_cut.emit(self.note.id)
 
@@ -683,7 +703,7 @@ class MainWindow(QMainWindow):
         self.breadcrumb.setText("Raíz" if self.current_board_id == self.project.root_board_id else "… > (pizarra)")
 
     # escena
-    def clear_scene(self): 
+    def clear_scene(self):
         self.scene.clear()
         self.palette.hide()
 
@@ -712,7 +732,7 @@ class MainWindow(QMainWindow):
         if n.type == "idea":
             it = IdeaNoteItem(n)
         elif n.type == "texto":
-            it = TextoNoteItem(n, palette_cb=self._show_palette_for)
+            it = TextoNoteItem(n, palette_cb=self._show_palette_above_note)
         elif n.type == "image":
             it = ImageNoteItem(n)
         elif n.type == "audio":
@@ -723,8 +743,12 @@ class MainWindow(QMainWindow):
         return it
 
     # Popup handler
-    def _show_palette_for(self, qtext_item: QGraphicsTextItem, scene_pos: QPointF, has_selection: bool):
-        self.palette.show_for(qtext_item, scene_pos, has_selection)
+    def _show_palette_above_note(self, qtext_item: QGraphicsTextItem, note_scene_rect: QRectF, show_format: bool):
+        if show_format:
+            self.palette.build_format()
+        else:
+            self.palette.build_emoji()
+        self.palette.show_above_note(qtext_item, note_scene_rect, show_format, self)
 
     # crear
     def create_idea_at(self, pos: QPointF):
@@ -924,7 +948,7 @@ class MainWindow(QMainWindow):
     def autosave(self):
         try:
             save_project(self.project, AUTOSAVE_JSON)
-            self.status.showMessage("Guardado", 1000)
+            self.status.showMessage("Guardado", 800)
         except Exception as e:
             self.status.showMessage(f"Error guardando: {e}", 3000)
 
