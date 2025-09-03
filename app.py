@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Tuple
 from PySide6.QtCore import Qt, QRectF, QPointF, Signal, QUrl, QObject
 from PySide6.QtGui import (
     QAction, QBrush, QColor, QFont, QGuiApplication, QKeySequence, QPixmap, QPen,
-    QTextCharFormat
+    QTextCharFormat, QDesktopServices
 )
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QStatusBar, QLabel, QToolBar, QStyle,
@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QPushButton, QSlider, QMessageBox
 )
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PySide6.QtGui import QTextCursor, QDesktopServices
+from PySide6.QtGui import QTextCursor
 
 # ------------------ Tema oscuro ------------------
 try:
@@ -44,15 +44,8 @@ def copy_into_assets(src_path: str) -> str:
         print("[assets] copy error:", e)
         return ""
 
-def remove_asset(rel_path: str):
-    try:
-        if not rel_path: return
-        abs_path = os.path.join(ASSETS_DIR, rel_path)
-        if os.path.exists(abs_path): os.remove(abs_path)
-    except Exception as e:
-        print("[assets] remove error:", e)
-
 def open_in_explorer(abs_path: str):
+    """Abre el explorador en la carpeta (y selecciona el archivo en Windows si es posible)."""
     try:
         if not abs_path or not os.path.exists(abs_path): return
         if sys.platform.startswith("win"):
@@ -104,7 +97,7 @@ class Project:
 def empty_project() -> Project:
     root_id = new_id()
     root = Board(id=root_id, title="Raíz")
-    return Project(version=7, project_id=new_id(), root_board_id=root_id, boards={root_id: root})
+    return Project(version=8, project_id=new_id(), root_board_id=root_id, boards={root_id: root})
 
 def save_project(p: Project, path: str = AUTOSAVE_JSON) -> None:
     os.makedirs(APP_DIR, exist_ok=True)
@@ -153,7 +146,7 @@ def load_project(path: str = AUTOSAVE_JSON) -> Project:
             )
         boards[bid] = Board(id=bd["id"], title=bd.get("title","Pizarra"),
                             items_order=bd.get("items_order", list(items.keys())), items=items)
-    return Project(version=int(data.get("version",7)), project_id=data.get("project_id", new_id()),
+    return Project(version=int(data.get("version",8)), project_id=data.get("project_id", new_id()),
                    root_board_id=data["root_board_id"], boards=boards,
                    last_opened=float(data.get("last_opened", time.time())))
 
@@ -170,6 +163,9 @@ class PalettePopup(QWidget):
         self.lay = QHBoxLayout(self); self.lay.setContentsMargins(8,8,8,8); self.lay.setSpacing(8)
         self.active_item: Optional[QGraphicsTextItem] = None
 
+    def hide_if_showing(self):
+        if self.isVisible(): self.hide()
+
     def _clear(self):
         while self.lay.count():
             w = self.lay.takeAt(0).widget()
@@ -183,8 +179,8 @@ class PalettePopup(QWidget):
 
     def build_format(self):
         self._clear()
-        b = QPushButton("B", self); b.setFixedSize(28,28); b.clicked.connect(lambda: self._apply_format(bold=True))
-        i = QPushButton("I", self); i.setFixedSize(28,28); i.clicked.connect(lambda: self._apply_format(italic=True))
+        b = QPushButton("B", self); b.setFixedSize(28,28); b.clicked.connect(lambda: self._apply_format(toggle="bold"))
+        i = QPushButton("I", self); i.setFixedSize(28,28); i.clicked.connect(lambda: self._apply_format(toggle="italic"))
         self.lay.addWidget(b); self.lay.addWidget(i)
 
     def _insert_emoji(self, ch: str):
@@ -195,18 +191,20 @@ class PalettePopup(QWidget):
         cur.insertText(ch)
         self.active_item.setTextCursor(cur)
 
-    def _apply_format(self, bold: bool=False, italic: bool=False):
+    def _apply_format(self, toggle: str):
         if not self.active_item: return
         cur = self.active_item.textCursor()
         if not cur or not cur.hasSelection():
             return  # SOLO si hay selección
+        # Detectar el estado actual en el inicio de la selección y alternar
+        base_fmt = cur.charFormat()
         fmt = QTextCharFormat()
-        if bold:
-            # alternar según primer carácter de selección
-            weight = self.active_item.font().weight()
-            fmt.setFontWeight(QFont.Bold if weight != QFont.Bold else QFont.Normal)
-        if italic:
-            fmt.setFontItalic(not self.active_item.font().italic())
+        if toggle == "bold":
+            is_bold = (base_fmt.fontWeight() == QFont.Bold)
+            fmt.setFontWeight(QFont.Normal if is_bold else QFont.Bold)
+        elif toggle == "italic":
+            is_italic = base_fmt.fontItalic()
+            fmt.setFontItalic(not is_italic)
         cur.mergeCharFormat(fmt)
         self.active_item.setTextCursor(cur)
 
@@ -247,14 +245,14 @@ class BaseNoteItem(QObject, QGraphicsRectItem):
         self.setAcceptHoverEvents(True)
         self._hovering = False
 
-    # Contorno permanente INVISIBLE. Sólo dibujamos una guía tenue al seleccionar/hover.
+    # Contorno permanente INVISIBLE. Sólo guía tenue al seleccionar/hover.
     def paint(self, painter, option, widget=None):
         if self.isSelected() or self._hovering:
             pen = QPen(QColor(160,160,160,200), 1, Qt.DashLine)
             painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(self.rect())
-        # Nada más: NO llamamos a super().paint para evitar el borde negro
+        # Intencionalmente no llamamos a super().paint() para evitar borde negro
 
     def hoverEnterEvent(self, e): self._hovering=True; self.update(); super().hoverEnterEvent(e)
     def hoverLeaveEvent(self, e): self._hovering=False; self.update(); super().hoverLeaveEvent(e)
@@ -389,6 +387,10 @@ class TextoNoteItem(BaseNoteItem):
 
     def on_selected(self, selected: bool):
         self.handle.setVisible(selected)
+        # Al des-seleccionar, ocultar palette
+        if not selected and self.palette_cb:
+            # usamos el MainWindow vía parent() de scene in MainWindow; ocultaremos allí con selectionChanged
+            pass
 
     def mousePressEvent(self, event):
         self._resizing = self.handle.isVisible() and self.handle.contains(self.mapFromScene(event.scenePos()))
@@ -413,7 +415,7 @@ class TextoNoteItem(BaseNoteItem):
 
     def mouseReleaseEvent(self, event):
         self._resizing = False
-        # Si al soltar hay selección: mostrar formato
+        # Si al soltar hay selección: mostrar formato automáticamente
         if self.palette_cb:
             cur = self.body_item.textCursor()
             if cur and cur.hasSelection():
@@ -425,13 +427,23 @@ class TextoNoteItem(BaseNoteItem):
         menu, act_edit, _a, act_del, act_cut, act_copy = self._common_menu(with_open=False)
         act_bigger = menu.addAction("Aumentar tamaño texto")
         act_smaller = menu.addAction("Reducir tamaño texto")
+        act_copy_plain = menu.addAction("Copiar texto (sin formato)")
         chosen = menu.exec(event.screenPos())
         if chosen == act_edit: self.request_edit.emit(self.note.id)
         elif chosen == act_bigger: self._bump_font(+1)
         elif chosen == act_smaller: self._bump_font(-1)
+        elif chosen == act_copy_plain: self._copy_plain()
         elif chosen == act_del: self.request_delete.emit(self.note.id)
         elif chosen == act_copy: self.request_copy.emit(self.note.id)
         elif chosen == act_cut: self.request_cut.emit(self.note.id)
+
+    def _copy_plain(self):
+        cur = self.body_item.textCursor()
+        if cur and cur.hasSelection():
+            txt = cur.selectedText().replace("\u2029", "\n")
+        else:
+            txt = self.body_item.toPlainText()
+        QGuiApplication.clipboard().setText(txt)
 
     def _bump_font(self, delta: int):
         f = self.body_item.font()
@@ -563,6 +575,14 @@ class BoardScene(QGraphicsScene):
     request_new_idea = Signal(QPointF)
     request_new_texto = Signal(QPointF)
     request_paste = Signal(QPointF)
+    request_hide_palette = Signal()
+
+    def mousePressEvent(self, event):
+        # Si clic en vacío o sobre algo que no sea texto -> ocultar palette
+        it = self.itemAt(event.scenePos(), self.views()[0].transform()) if self.views() else None
+        if not (isinstance(it, QGraphicsTextItem) or isinstance(it, TextoNoteItem)):
+            self.request_hide_palette.emit()
+        super().mousePressEvent(event)
 
     def contextMenuEvent(self, event):
         item = self.itemAt(event.scenePos(), self.views()[0].transform()) if self.views() else None
@@ -642,6 +662,10 @@ class MainWindow(QMainWindow):
         self.scene.request_new_texto.connect(self.create_texto_at)
         self.scene.request_paste.connect(self.paste_at)
         self.view.dropped_files.connect(self.handle_dropped_files)
+        self.scene.request_hide_palette.connect(self._hide_palette)
+
+        # Ocultar palette al cambiar selección a algo que no sea Texto
+        self.scene.selectionChanged.connect(self._on_selection_changed)
 
         # Shortcuts
         self.addAction(self._shortcut("Ctrl+X", self.cut_selected))
@@ -660,6 +684,16 @@ class MainWindow(QMainWindow):
         left = QLabel(""); mid = QLabel(text); right = QLabel("")
         mid.setAlignment(Qt.AlignCenter)
         self.status.addWidget(left,1); self.status.addWidget(mid,0); self.status.addWidget(right,1)
+
+    def _hide_palette(self):
+        self.palette.hide_if_showing()
+
+    def _on_selection_changed(self):
+        # Si la selección actual no contiene un Texto, ocultar palette
+        for it in self.scene.selectedItems():
+            if isinstance(it, TextoNoteItem):
+                return
+        self._hide_palette()
 
     # navegación
     def go_to_board(self, board_id: str, push_history: bool = True):
@@ -704,7 +738,7 @@ class MainWindow(QMainWindow):
     # escena
     def clear_scene(self):
         self.scene.clear()
-        self.palette.hide()
+        self._hide_palette()
 
     def refresh_board(self):
         self.clear_scene()
@@ -825,14 +859,10 @@ class MainWindow(QMainWindow):
             self.project.boards[child_id] = Board(id=child_id, title=n.payload.title or "Sub-pizarra")
         self.go_to_board(n.child_board_id, push_history=True)
 
-    # eliminar (incluye borrar assets de /assets)
+    # eliminar (NO elimina archivos del disco; solo de la pizarra)
     def delete_note(self, note_id: str):
         b = self.project.boards[self.current_board_id]; n = b.items.get(note_id)
         if not n: return
-        if n.type=="image" and n.payload.image_asset:
-            remove_asset(n.payload.image_asset)
-        if n.type=="audio" and n.payload.audio_asset:
-            remove_asset(n.payload.audio_asset)
         if n.type=="idea" and n.child_board_id:
             reply = QMessageBox.question(self, "Eliminar",
                 "Esta idea tiene una sub-pizarra.\n¿Eliminar también todo su contenido?",
@@ -847,10 +877,6 @@ class MainWindow(QMainWindow):
         bd = self.project.boards.get(board_id)
         if not bd: return
         for n in list(bd.items.values()):
-            if n.type=="image" and n.payload.image_asset:
-                remove_asset(n.payload.image_asset)
-            if n.type=="audio" and n.payload.audio_asset:
-                remove_asset(n.payload.audio_asset)
             if n.type=="idea" and n.child_board_id:
                 self._delete_board_recursive(n.child_board_id)
         self.project.boards.pop(board_id, None)
@@ -969,6 +995,7 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 
 
