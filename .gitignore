@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.env
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Proyecto
+*.wbx
+*.log
+/assets/
+last.json
+
+# IDEs
+.vscode/
+.idea/
