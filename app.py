@@ -4,7 +4,8 @@ from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, QRectF, QPointF, Signal, QUrl, QObject
 from PySide6.QtGui import (
-    QAction, QBrush, QColor, QFont, QGuiApplication, QKeySequence, QPixmap, QPen
+    QAction, QBrush, QColor, QFont, QGuiApplication, QKeySequence, QPixmap, QPen,
+    QTextCharFormat
 )
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QStatusBar, QLabel, QToolBar, QStyle,
@@ -13,8 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QPushButton, QSlider, QMessageBox
 )
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PySide6.QtGui import QTextCursor
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QTextCursor, QDesktopServices
 
 # ------------------ Tema oscuro ------------------
 try:
@@ -33,11 +33,9 @@ def new_id() -> str: return uuid.uuid4().hex
 
 def copy_into_assets(src_path: str) -> str:
     try:
-        if not src_path:
-            return ""
+        if not src_path: return ""
         src_path = os.path.normpath(src_path)
-        if not os.path.exists(src_path):
-            return ""
+        if not os.path.exists(src_path): return ""
         ext = pathlib.Path(src_path).suffix.lower()
         rel = f"{new_id()}{ext}"
         shutil.copy2(src_path, os.path.join(ASSETS_DIR, rel))
@@ -46,13 +44,18 @@ def copy_into_assets(src_path: str) -> str:
         print("[assets] copy error:", e)
         return ""
 
-def open_in_explorer(abs_path: str):
-    """Abre el explorador en la carpeta (y selecciona el archivo en Windows si es posible)."""
+def remove_asset(rel_path: str):
     try:
-        if not abs_path or not os.path.exists(abs_path):
-            return
+        if not rel_path: return
+        abs_path = os.path.join(ASSETS_DIR, rel_path)
+        if os.path.exists(abs_path): os.remove(abs_path)
+    except Exception as e:
+        print("[assets] remove error:", e)
+
+def open_in_explorer(abs_path: str):
+    try:
+        if not abs_path or not os.path.exists(abs_path): return
         if sys.platform.startswith("win"):
-            # Seleccionar el archivo
             os.system(f'explorer /select,"{abs_path}"')
         else:
             QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(abs_path)))
@@ -101,7 +104,7 @@ class Project:
 def empty_project() -> Project:
     root_id = new_id()
     root = Board(id=root_id, title="Raíz")
-    return Project(version=6, project_id=new_id(), root_board_id=root_id, boards={root_id: root})
+    return Project(version=7, project_id=new_id(), root_board_id=root_id, boards={root_id: root})
 
 def save_project(p: Project, path: str = AUTOSAVE_JSON) -> None:
     os.makedirs(APP_DIR, exist_ok=True)
@@ -150,15 +153,15 @@ def load_project(path: str = AUTOSAVE_JSON) -> Project:
             )
         boards[bid] = Board(id=bd["id"], title=bd.get("title","Pizarra"),
                             items_order=bd.get("items_order", list(items.keys())), items=items)
-    return Project(version=int(data.get("version",6)), project_id=data.get("project_id", new_id()),
+    return Project(version=int(data.get("version",7)), project_id=data.get("project_id", new_id()),
                    root_board_id=data["root_board_id"], boards=boards,
                    last_opened=float(data.get("last_opened", time.time())))
 
 # ------------------ Popup emojis / formato ------------------
 class PalettePopup(QWidget):
-    """Popup que aparece sobre el recuadro de texto:
+    """Popup:
        - Sin selección: 8 emojis (incluye ✅ ❌)
-       - Con selección: B / I (negrita / cursiva)
+       - Con selección: B / I (negrita / cursiva) aplicadas SOLO a la selección
     """
     def __init__(self, parent=None):
         super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint)
@@ -186,25 +189,33 @@ class PalettePopup(QWidget):
 
     def _insert_emoji(self, ch: str):
         if not self.active_item: return
-        cur = self.active_item.textCursor() if hasattr(self.active_item, "textCursor") else None
-        if cur and cur.hasSelection():
-            cur.clearSelection()
-            self.active_item.setTextCursor(cur)
-        self.active_item.setPlainText(self.active_item.toPlainText() + ch)
+        cur = self.active_item.textCursor()
+        cur.clearSelection()
+        cur.movePosition(QTextCursor.End)
+        cur.insertText(ch)
+        self.active_item.setTextCursor(cur)
 
     def _apply_format(self, bold: bool=False, italic: bool=False):
         if not self.active_item: return
-        f = self.active_item.font()
-        if bold:   f.setBold(not f.bold())
-        if italic: f.setItalic(not f.italic())
-        self.active_item.setFont(f)
+        cur = self.active_item.textCursor()
+        if not cur or not cur.hasSelection():
+            return  # SOLO si hay selección
+        fmt = QTextCharFormat()
+        if bold:
+            # alternar según primer carácter de selección
+            weight = self.active_item.font().weight()
+            fmt.setFontWeight(QFont.Bold if weight != QFont.Bold else QFont.Normal)
+        if italic:
+            fmt.setFontItalic(not self.active_item.font().italic())
+        cur.mergeCharFormat(fmt)
+        self.active_item.setTextCursor(cur)
 
     def show_above_note(self, text_item: QGraphicsTextItem, note_scene_rect: QRectF, show_format: bool, main_win: "MainWindow"):
         self.active_item = text_item
         if show_format: self.build_format()
         else: self.build_emoji()
-        # Posicionar centrado arriba del recuadro (no encima del texto)
         view = main_win.view
+        # centrado ARRIBA del recuadro (no encima del texto)
         top_center = note_scene_rect.center(); top_center.setY(note_scene_rect.top() - 8)
         view_pt = view.mapFromScene(top_center)
         global_pt = view.viewport().mapToGlobal(view_pt)
@@ -213,13 +224,13 @@ class PalettePopup(QWidget):
 
 # ------------------ Items base ------------------
 class BaseNoteItem(QObject, QGraphicsRectItem):
-    request_open_child = Signal(str)      # idea -> abrir subpizarra
+    request_open_child = Signal(str)
     request_delete = Signal(str)
-    request_nest_into = Signal(str, str)  # dragged_id, target_id
+    request_nest_into = Signal(str, str)
     request_copy = Signal(str)
     request_cut = Signal(str)
     request_edit = Signal(str)
-    request_dirty = Signal()              # autosave inmediato
+    request_dirty = Signal()
 
     def __init__(self, note: Note):
         QObject.__init__(self)
@@ -236,14 +247,14 @@ class BaseNoteItem(QObject, QGraphicsRectItem):
         self.setAcceptHoverEvents(True)
         self._hovering = False
 
-    # contorno invisible; sólo en hover/selección
+    # Contorno permanente INVISIBLE. Sólo dibujamos una guía tenue al seleccionar/hover.
     def paint(self, painter, option, widget=None):
-        painter.setBrush(Qt.NoBrush)
         if self.isSelected() or self._hovering:
-            painter.setPen(QPen(QColor(120,120,120,180), 1))
-        else:
-            painter.setPen(Qt.NoPen)
-        super().paint(painter, option, widget)
+            pen = QPen(QColor(160,160,160,200), 1, Qt.DashLine)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(self.rect())
+        # Nada más: NO llamamos a super().paint para evitar el borde negro
 
     def hoverEnterEvent(self, e): self._hovering=True; self.update(); super().hoverEnterEvent(e)
     def hoverLeaveEvent(self, e): self._hovering=False; self.update(); super().hoverLeaveEvent(e)
@@ -256,12 +267,10 @@ class BaseNoteItem(QObject, QGraphicsRectItem):
             self.on_selected(bool(value))
         return super().itemChange(change, value)
 
-    def on_selected(self, selected: bool):
-        """Subclases pueden implementar para mostrar/ocultar sus 'handles'."""
-        pass
+    def on_selected(self, selected: bool): pass
 
     def mouseReleaseEvent(self, event):
-        # anidar sobre IDEA si el centro cae en una IDEA (evita duplicados raros)
+        # anidar sobre IDEA (centro sobre otra idea)
         scene = self.scene()
         if scene:
             items = scene.items(event.scenePos())
@@ -281,7 +290,7 @@ class BaseNoteItem(QObject, QGraphicsRectItem):
         act_copy = menu.addAction("Copiar")
         return menu, act_edit, act_open, act_del, act_cut, act_copy
 
-# ---- IDEA (resizable con handle visible sólo si está seleccionada) ----
+# ---- IDEA ----
 class IdeaNoteItem(BaseNoteItem):
     HANDLE = 12
     def __init__(self, note: Note):
@@ -292,13 +301,20 @@ class IdeaNoteItem(BaseNoteItem):
         f1 = QFont(); f1.setPointSize(12); f1.setBold(True)
         self.title_item.setFont(f1); self.title_item.setDefaultTextColor(QColor("white"))
         self.title_item.setTextInteractionFlags(Qt.TextEditorInteraction); self.title_item.setPos(8,8)
+        self.title_item.document().contentsChanged.connect(self._commit_and_dirty)
 
         self.subtitle_item = QGraphicsTextItem(note.payload.subtitle, self)
         f2 = QFont(); f2.setPointSize(9)
         self.subtitle_item.setFont(f2); self.subtitle_item.setDefaultTextColor(QColor("#cccccc"))
         self.subtitle_item.setTextInteractionFlags(Qt.TextEditorInteraction); self.subtitle_item.setPos(8,34)
+        self.subtitle_item.document().contentsChanged.connect(self._commit_and_dirty)
 
         self.handle = QGraphicsRectItem(self); self._reposition_handle(); self.handle.setVisible(False)
+
+    def _commit_and_dirty(self):
+        self.note.payload.title = self.title_item.toPlainText()
+        self.note.payload.subtitle = self.subtitle_item.toPlainText()
+        self.request_dirty.emit()
 
     def _reposition_handle(self):
         r = self.rect()
@@ -327,14 +343,7 @@ class IdeaNoteItem(BaseNoteItem):
         else:
             super().mouseMoveEvent(event)
 
-    def mouseReleaseEvent(self, event):
-        self._resizing = False
-        super().mouseReleaseEvent(event)
-
-    def commit(self):
-        self.note.payload.title = self.title_item.toPlainText()
-        self.note.payload.subtitle = self.subtitle_item.toPlainText()
-        self.request_dirty.emit()
+    def mouseDoubleClickEvent(self, event): self.request_open_child.emit(self.note.id)
 
     def contextMenuEvent(self, event):
         menu, act_edit, act_open, act_del, act_cut, act_copy = self._common_menu(with_open=True)
@@ -344,8 +353,6 @@ class IdeaNoteItem(BaseNoteItem):
         elif chosen == act_del: self.request_delete.emit(self.note.id)
         elif chosen == act_copy: self.request_copy.emit(self.note.id)
         elif chosen == act_cut: self.request_cut.emit(self.note.id)
-
-    def mouseDoubleClickEvent(self, event): self.request_open_child.emit(self.note.id)
 
 # ---- TEXTO ----
 class TextoNoteItem(BaseNoteItem):
@@ -358,10 +365,15 @@ class TextoNoteItem(BaseNoteItem):
         self.body_item.setTextInteractionFlags(Qt.TextEditorInteraction)
         self.body_item.setDefaultTextColor(QColor("#eaeaea"))
         f = QFont(); f.setPointSize(max(6, note.payload.font_pt)); self.body_item.setFont(f)
+        self.body_item.document().contentsChanged.connect(self._commit_and_dirty)
         self._apply_text_width()
 
         self.handle = QGraphicsRectItem(self); self._reposition_handle(); self.handle.setVisible(False)
         self.palette_cb = palette_cb  # fn(text_item, note_scene_rect, show_format)
+
+    def _commit_and_dirty(self):
+        self.note.payload.body = self.body_item.toPlainText()
+        self.request_dirty.emit()
 
     def _reposition_handle(self):
         r = self.rect()
@@ -380,16 +392,10 @@ class TextoNoteItem(BaseNoteItem):
 
     def mousePressEvent(self, event):
         self._resizing = self.handle.isVisible() and self.handle.contains(self.mapFromScene(event.scenePos()))
-        # mostrar popup arriba del recuadro (emojis por defecto)
         if not self._resizing and self.palette_cb:
             scene_rect = self.mapToScene(self.boundingRect()).boundingRect()
-            # Si al presionar ya había selección, mostramos formato
-            show_fmt = False
-            if hasattr(self.body_item, "textCursor"):
-                cur = self.body_item.textCursor()
-                if isinstance(cur, QTextCursor) and cur.hasSelection():
-                    show_fmt = True
-            self.palette_cb(self.body_item, scene_rect, show_format=show_fmt)
+            cur = self.body_item.textCursor()
+            self.palette_cb(self.body_item, scene_rect, show_format=cur.hasSelection())
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -407,10 +413,10 @@ class TextoNoteItem(BaseNoteItem):
 
     def mouseReleaseEvent(self, event):
         self._resizing = False
-        # Si hay selección al soltar, cambiar a modo formato
-        if self.palette_cb and hasattr(self.body_item, "textCursor"):
+        # Si al soltar hay selección: mostrar formato
+        if self.palette_cb:
             cur = self.body_item.textCursor()
-            if isinstance(cur, QTextCursor) and cur.hasSelection():
+            if cur and cur.hasSelection():
                 scene_rect = self.mapToScene(self.boundingRect()).boundingRect()
                 self.palette_cb(self.body_item, scene_rect, show_format=True)
         super().mouseReleaseEvent(event)
@@ -437,11 +443,6 @@ class TextoNoteItem(BaseNoteItem):
         self.request_dirty.emit()
         self.update()
 
-    def focusOutEvent(self, event):
-        self.note.payload.body = self.body_item.toPlainText()
-        self.request_dirty.emit()
-        super().focusOutEvent(event)
-
 # ---- IMAGEN ----
 class ImageNoteItem(BaseNoteItem):
     HANDLE = 12
@@ -453,7 +454,6 @@ class ImageNoteItem(BaseNoteItem):
         self.handle = QGraphicsRectItem(self); self._reposition_handle(); self.handle.setVisible(False)
 
     def _reload_pixmap(self):
-        # Ajustar rect a la imagen + padding corto
         pad = 4
         if self.note.payload.image_asset:
             abs_path = os.path.join(ASSETS_DIR, self.note.payload.image_asset)
@@ -467,7 +467,6 @@ class ImageNoteItem(BaseNoteItem):
                     self.setRect(QRectF(0,0, scaled.width()+2*pad, scaled.height()+2*pad))
                     self.pix_item.setPos(pad, pad)
                     return
-        # fallback
         self.setRect(QRectF(0,0,180,120))
 
     def _reposition_handle(self):
@@ -826,10 +825,14 @@ class MainWindow(QMainWindow):
             self.project.boards[child_id] = Board(id=child_id, title=n.payload.title or "Sub-pizarra")
         self.go_to_board(n.child_board_id, push_history=True)
 
-    # eliminar
+    # eliminar (incluye borrar assets de /assets)
     def delete_note(self, note_id: str):
         b = self.project.boards[self.current_board_id]; n = b.items.get(note_id)
         if not n: return
+        if n.type=="image" and n.payload.image_asset:
+            remove_asset(n.payload.image_asset)
+        if n.type=="audio" and n.payload.audio_asset:
+            remove_asset(n.payload.audio_asset)
         if n.type=="idea" and n.child_board_id:
             reply = QMessageBox.question(self, "Eliminar",
                 "Esta idea tiene una sub-pizarra.\n¿Eliminar también todo su contenido?",
@@ -844,6 +847,10 @@ class MainWindow(QMainWindow):
         bd = self.project.boards.get(board_id)
         if not bd: return
         for n in list(bd.items.values()):
+            if n.type=="image" and n.payload.image_asset:
+                remove_asset(n.payload.image_asset)
+            if n.type=="audio" and n.payload.audio_asset:
+                remove_asset(n.payload.audio_asset)
             if n.type=="idea" and n.child_board_id:
                 self._delete_board_recursive(n.child_board_id)
         self.project.boards.pop(board_id, None)
@@ -962,6 +969,7 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 
 
