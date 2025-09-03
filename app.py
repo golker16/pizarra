@@ -44,7 +44,6 @@ def copy_into_assets(src_path: str) -> str:
         return ""
 
 def save_qimage_into_assets(img: QImage, ext: str = ".png") -> str:
-    """Guarda un QImage (desde el portapapeles) en /assets y devuelve el nombre relativo."""
     try:
         rel = f"{new_id()}{ext}"
         abs_path = os.path.join(ASSETS_DIR, rel)
@@ -55,7 +54,6 @@ def save_qimage_into_assets(img: QImage, ext: str = ".png") -> str:
         return ""
 
 def open_in_explorer(abs_path: str):
-    """Abre el explorador en la carpeta (y selecciona el archivo en Windows si es posible)."""
     try:
         if not abs_path or not os.path.exists(abs_path): return
         if sys.platform.startswith("win"):
@@ -65,17 +63,45 @@ def open_in_explorer(abs_path: str):
     except Exception as e:
         print("[open] error:", e)
 
+# --------- utilidades de icono/runtime ----------
+def _runtime_base_dir() -> str:
+    # Cuando está empacado con PyInstaller, _MEIPASS apunta al dir temporal del bundle
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        return base
+    # Cuando se corre desde source o onedir
+    return os.path.dirname(os.path.abspath(sys.argv[0]))
+
+def find_runtime_asset(rel_path: str) -> Optional[str]:
+    """
+    Busca primero en %APPDATA%/WhiteBoard/assets, luego junto al .exe en ./assets.
+    Devuelve ruta absoluta si existe.
+    """
+    candidates = [
+        os.path.join(ASSETS_DIR, rel_path),                  # datos en roaming
+        os.path.join(_runtime_base_dir(), "assets", rel_path) # carpeta assets del build
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return None
+
+def set_app_icon(app: QApplication):
+    ico = find_runtime_asset("app.ico")
+    png = find_runtime_asset("app.png")
+    if ico:
+        app.setWindowIcon(QIcon(ico))
+    elif png:
+        app.setWindowIcon(QIcon(png))
+
 # ------------------ Modelo ------------------
 @dataclass
 class NotePayload:
-    # IDEA
-    title: str = ""
+    title: str = ""      # IDEA
     subtitle: str = ""
-    # TEXTO
-    body: str = ""
+    body: str = ""       # TEXTO
     font_pt: int = 12
-    # MEDIA
-    audio_asset: str = ""
+    audio_asset: str = ""  # MEDIA
     image_asset: str = ""
     volume: int = 100
 
@@ -86,7 +112,7 @@ class Note:
     pos: Tuple[float, float] = (0.0, 0.0)
     size: Tuple[float, float] = (260.0, 140.0)
     z: int = 0
-    child_board_id: Optional[str] = None  # solo para idea
+    child_board_id: Optional[str] = None
     payload: NotePayload = field(default_factory=NotePayload)
 
 @dataclass
@@ -185,14 +211,12 @@ class BaseNoteItem(QObject, QGraphicsRectItem):
         self.setAcceptHoverEvents(True)
         self._hovering = False
 
-    # Contorno permanente INVISIBLE. Sólo guía tenue al seleccionar/hover.
     def paint(self, painter, option, widget=None):
         if self.isSelected() or self._hovering:
             pen = QPen(QColor(160,160,160,200), 1, Qt.DashLine)
             painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(self.rect())
-        # No llamamos a super().paint() para evitar el borde negro
 
     def hoverEnterEvent(self, e): self._hovering=True; self.update(); super().hoverEnterEvent(e)
     def hoverLeaveEvent(self, e): self._hovering=False; self.update(); super().hoverLeaveEvent(e)
@@ -208,7 +232,6 @@ class BaseNoteItem(QObject, QGraphicsRectItem):
     def on_selected(self, selected: bool): pass
 
     def mouseReleaseEvent(self, event):
-        # anidar sobre IDEA (centro sobre otra idea)
         scene = self.scene()
         if scene:
             items = scene.items(event.scenePos())
@@ -251,7 +274,7 @@ class IdeaNoteItem(BaseNoteItem):
 
     def _commit_and_dirty(self):
         self.note.payload.title = self.title_item.toPlainText()
-        self.note.payload.subtitle = self.subtitle_item.toPlainText()
+               self.note.payload.subtitle = self.subtitle_item.toPlainText()
         self.request_dirty.emit()
 
     def _reposition_handle(self):
@@ -543,14 +566,11 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("WhiteBoard — PySide6")
         self.resize(1280, 800)
 
-        # Iconos de ventana (.ico o .png en /assets  dentro de la carpeta de datos)
-        ico_abs = os.path.join(ASSETS_DIR, "app.ico")
-        png_abs = os.path.join(ASSETS_DIR, "app.png")
-        if os.path.exists(ico_abs):
-            self.setWindowIcon(QIcon(ico_abs))
-        elif os.path.exists(png_abs):
-            self.setWindowIcon(QIcon(png_abs))
-        # Nota: para que el .exe tenga icono, compila con PyInstaller usando --icon assets/app.ico
+        # Fijar icono a nivel de ventana (además del global en QApplication)
+        ico = find_runtime_asset("app.ico")
+        png = find_runtime_asset("app.png")
+        if ico: self.setWindowIcon(QIcon(ico))
+        elif png: self.setWindowIcon(QIcon(png))
 
         try: self.project = load_project()
         except Exception: self.project = empty_project()
@@ -579,13 +599,13 @@ class MainWindow(QMainWindow):
         # Conexiones
         self.scene.request_new_idea.connect(self.create_idea_at)
         self.scene.request_new_texto.connect(self.create_texto_at)
-        self.scene.request_paste.connect(lambda p: self.paste_at(p))  # click derecho "Pegar"
+        self.scene.request_paste.connect(lambda p: self.paste_at(p))
         self.view.dropped_files.connect(self.handle_dropped_files)
 
         # Shortcuts
         self.addAction(self._shortcut("Ctrl+X", self.cut_selected))
         self.addAction(self._shortcut("Ctrl+C", self.copy_selected))
-        self.addAction(self._shortcut("Ctrl+V", lambda: self.paste_at(None)))  # Pegar (incluye imágenes del portapapeles)
+        self.addAction(self._shortcut("Ctrl+V", lambda: self.paste_at(None)))
 
         self.refresh_board()
 
@@ -714,11 +734,10 @@ class MainWindow(QMainWindow):
         else:
             self.status.showMessage("Formato no soportado", 2000)
 
-    # Pegar (Ctrl+V): prioriza imagen del portapapeles; luego URLs de imagen; luego nuestro JSON
+    # Pegar (Ctrl+V): prioriza imagen; luego URLs; luego nuestro JSON
     def paste_at(self, pos: Optional[QPointF]):
         cb = QGuiApplication.clipboard()
         md = cb.mimeData()
-        # 1) Imagen cruda en portapapeles
         if md.hasImage():
             img: QImage = md.imageData()
             rel = save_qimage_into_assets(img, ".png")
@@ -727,7 +746,6 @@ class MainWindow(QMainWindow):
                 self.status.showMessage("Imagen pegada", 1500)
                 self.autosave()
                 return
-        # 2) URLs (p. ej. archivos de imagen copiados)
         if md.hasUrls():
             paths = [u.toLocalFile() for u in md.urls() if u.isLocalFile()]
             any_img = False
@@ -740,7 +758,6 @@ class MainWindow(QMainWindow):
                 self.autosave()
                 self.status.showMessage("Imagen(es) pegada(s)", 1500)
                 return
-        # 3) Nuestro formato de árbol (copiar/pegar notas)
         clip = cb.text()
         try:
             data = json.loads(clip)
@@ -750,7 +767,6 @@ class MainWindow(QMainWindow):
                 return
         except Exception:
             pass
-        # Nada reconocido
         self.status.showMessage("Nada que pegar aquí", 1200)
 
     def _create_image_note_from_rel(self, rel: str, pos: Optional[QPointF]):
@@ -779,7 +795,6 @@ class MainWindow(QMainWindow):
         b.items[nid]=note; b.items_order.append(nid)
         self.refresh_board(); self.autosave()
 
-    # editar (enfocar campos)
     def edit_note(self, note_id: str):
         b = self.project.boards[self.current_board_id]; n = b.items.get(note_id)
         if not n: return
@@ -789,7 +804,6 @@ class MainWindow(QMainWindow):
             if isinstance(it, TextoNoteItem) and it.note.id==note_id:
                 it.body_item.setFocus(); return
 
-    # abrir subpizarra (solo idea)
     def open_child_of_note(self, note_id: str):
         b = self.project.boards[self.current_board_id]; n = b.items.get(note_id)
         if not n or n.type != "idea": return
@@ -798,7 +812,6 @@ class MainWindow(QMainWindow):
             self.project.boards[child_id] = Board(id=child_id, title=n.payload.title or "Sub-pizarra")
         self.go_to_board(n.child_board_id, push_history=True)
 
-    # eliminar (NO elimina archivos del disco; solo de la pizarra)
     def delete_note(self, note_id: str):
         b = self.project.boards[self.current_board_id]; n = b.items.get(note_id)
         if not n: return
@@ -820,7 +833,6 @@ class MainWindow(QMainWindow):
                 self._delete_board_recursive(n.child_board_id)
         self.project.boards.pop(board_id, None)
 
-    # anidar
     def nest_note_into(self, dragged_id: str, target_id: str):
         if dragged_id == target_id: return
         b = self.project.boards[self.current_board_id]
@@ -837,7 +849,6 @@ class MainWindow(QMainWindow):
         child.items[dragged_id] = src; child.items_order.append(dragged_id)
         self.refresh_board(); self.autosave()
 
-    # clipboard (copiar/cortar/pegar de notas como árbol)
     def _selected_note_id(self) -> Optional[str]:
         for it in self.scene.selectedItems():
             if isinstance(it, BaseNoteItem): return it.note.id
@@ -908,7 +919,6 @@ class MainWindow(QMainWindow):
             for ch in node["children"]:
                 self._paste_subtree(ch, child_id, None)
 
-    # autosave
     def autosave(self):
         try:
             save_project(self.project, AUTOSAVE_JSON)
@@ -918,6 +928,8 @@ class MainWindow(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
+    # Fijamos icono global (algunos estilos lo toman del QApplication)
+    set_app_icon(app)
     if QDARKSTYLE_OK:
         try: app.setStyleSheet(qdarkstyle.load_stylesheet(qt_api="pyside6"))
         except Exception: pass
@@ -926,6 +938,7 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 
 
