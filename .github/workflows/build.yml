@@ -33,13 +33,14 @@ jobs:
             echo "WARNING: assets/app.ico not found. EXE will use default icon."
           fi
 
-      - name: Build (PyInstaller onedir)
+      - name: Build (PyInstaller onedir windowed)
         shell: bash
         run: >
           python -m PyInstaller app.py
           --noconfirm
           --clean
           --onedir
+          --windowed
           --name WhiteBoard
           --icon assets/app.ico
           --collect-submodules PySide6
@@ -59,5 +60,6 @@ jobs:
           name: WhiteBoard_onedir_Windows
           path: dist/WhiteBoard/**
           if-no-files-found: error
+
 
 
