@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Tuple
 from PySide6.QtCore import Qt, QRectF, QPointF, Signal, QUrl, QObject
 from PySide6.QtGui import (
     QAction, QBrush, QColor, QFont, QGuiApplication, QKeySequence, QPixmap, QPen,
-    QTextCharFormat, QDesktopServices
+    QDesktopServices, QIcon, QImage
 )
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QStatusBar, QLabel, QToolBar, QStyle,
@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QPushButton, QSlider, QMessageBox
 )
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PySide6.QtGui import QTextCursor
 
 # ------------------ Tema oscuro ------------------
 try:
@@ -42,6 +41,17 @@ def copy_into_assets(src_path: str) -> str:
         return rel
     except Exception as e:
         print("[assets] copy error:", e)
+        return ""
+
+def save_qimage_into_assets(img: QImage, ext: str = ".png") -> str:
+    """Guarda un QImage (desde el portapapeles) en /assets y devuelve el nombre relativo."""
+    try:
+        rel = f"{new_id()}{ext}"
+        abs_path = os.path.join(ASSETS_DIR, rel)
+        img.save(abs_path)
+        return rel
+    except Exception as e:
+        print("[assets] save_qimage error:", e)
         return ""
 
 def open_in_explorer(abs_path: str):
@@ -97,7 +107,7 @@ class Project:
 def empty_project() -> Project:
     root_id = new_id()
     root = Board(id=root_id, title="Raíz")
-    return Project(version=8, project_id=new_id(), root_board_id=root_id, boards={root_id: root})
+    return Project(version=9, project_id=new_id(), root_board_id=root_id, boards={root_id: root})
 
 def save_project(p: Project, path: str = AUTOSAVE_JSON) -> None:
     os.makedirs(APP_DIR, exist_ok=True)
@@ -146,79 +156,9 @@ def load_project(path: str = AUTOSAVE_JSON) -> Project:
             )
         boards[bid] = Board(id=bd["id"], title=bd.get("title","Pizarra"),
                             items_order=bd.get("items_order", list(items.keys())), items=items)
-    return Project(version=int(data.get("version",8)), project_id=data.get("project_id", new_id()),
+    return Project(version=int(data.get("version",9)), project_id=data.get("project_id", new_id()),
                    root_board_id=data["root_board_id"], boards=boards,
                    last_opened=float(data.get("last_opened", time.time())))
-
-# ------------------ Popup emojis / formato ------------------
-class PalettePopup(QWidget):
-    """Popup:
-       - Sin selección: 8 emojis (incluye ✅ ❌)
-       - Con selección: B / I (negrita / cursiva) aplicadas SOLO a la selección
-    """
-    def __init__(self, parent=None):
-        super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setStyleSheet("background:rgba(40,40,40,0.96); border-radius:8px;")
-        self.lay = QHBoxLayout(self); self.lay.setContentsMargins(8,8,8,8); self.lay.setSpacing(8)
-        self.active_item: Optional[QGraphicsTextItem] = None
-
-    def hide_if_showing(self):
-        if self.isVisible(): self.hide()
-
-    def _clear(self):
-        while self.lay.count():
-            w = self.lay.takeAt(0).widget()
-            if w: w.setParent(None)
-
-    def build_emoji(self):
-        self._clear()
-        for ch in ["😀","😎","🤔","🚀","❤️","👍","✅","❌"]:
-            b = QPushButton(ch, self); b.setFixedSize(28,28); b.clicked.connect(lambda _=False, c=ch: self._insert_emoji(c))
-            self.lay.addWidget(b)
-
-    def build_format(self):
-        self._clear()
-        b = QPushButton("B", self); b.setFixedSize(28,28); b.clicked.connect(lambda: self._apply_format(toggle="bold"))
-        i = QPushButton("I", self); i.setFixedSize(28,28); i.clicked.connect(lambda: self._apply_format(toggle="italic"))
-        self.lay.addWidget(b); self.lay.addWidget(i)
-
-    def _insert_emoji(self, ch: str):
-        if not self.active_item: return
-        cur = self.active_item.textCursor()
-        cur.clearSelection()
-        cur.movePosition(QTextCursor.End)
-        cur.insertText(ch)
-        self.active_item.setTextCursor(cur)
-
-    def _apply_format(self, toggle: str):
-        if not self.active_item: return
-        cur = self.active_item.textCursor()
-        if not cur or not cur.hasSelection():
-            return  # SOLO si hay selección
-        # Detectar el estado actual en el inicio de la selección y alternar
-        base_fmt = cur.charFormat()
-        fmt = QTextCharFormat()
-        if toggle == "bold":
-            is_bold = (base_fmt.fontWeight() == QFont.Bold)
-            fmt.setFontWeight(QFont.Normal if is_bold else QFont.Bold)
-        elif toggle == "italic":
-            is_italic = base_fmt.fontItalic()
-            fmt.setFontItalic(not is_italic)
-        cur.mergeCharFormat(fmt)
-        self.active_item.setTextCursor(cur)
-
-    def show_above_note(self, text_item: QGraphicsTextItem, note_scene_rect: QRectF, show_format: bool, main_win: "MainWindow"):
-        self.active_item = text_item
-        if show_format: self.build_format()
-        else: self.build_emoji()
-        view = main_win.view
-        # centrado ARRIBA del recuadro (no encima del texto)
-        top_center = note_scene_rect.center(); top_center.setY(note_scene_rect.top() - 8)
-        view_pt = view.mapFromScene(top_center)
-        global_pt = view.viewport().mapToGlobal(view_pt)
-        self.move(global_pt.x() - self.width()//2, global_pt.y() - self.height())
-        self.show()
 
 # ------------------ Items base ------------------
 class BaseNoteItem(QObject, QGraphicsRectItem):
@@ -252,7 +192,7 @@ class BaseNoteItem(QObject, QGraphicsRectItem):
             painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(self.rect())
-        # Intencionalmente no llamamos a super().paint() para evitar borde negro
+        # No llamamos a super().paint() para evitar el borde negro
 
     def hoverEnterEvent(self, e): self._hovering=True; self.update(); super().hoverEnterEvent(e)
     def hoverLeaveEvent(self, e): self._hovering=False; self.update(); super().hoverLeaveEvent(e)
@@ -355,7 +295,7 @@ class IdeaNoteItem(BaseNoteItem):
 # ---- TEXTO ----
 class TextoNoteItem(BaseNoteItem):
     HANDLE = 12
-    def __init__(self, note: Note, palette_cb=None):
+    def __init__(self, note: Note):
         super().__init__(note)
         self._resizing = False
         self._pad = 8
@@ -367,7 +307,6 @@ class TextoNoteItem(BaseNoteItem):
         self._apply_text_width()
 
         self.handle = QGraphicsRectItem(self); self._reposition_handle(); self.handle.setVisible(False)
-        self.palette_cb = palette_cb  # fn(text_item, note_scene_rect, show_format)
 
     def _commit_and_dirty(self):
         self.note.payload.body = self.body_item.toPlainText()
@@ -387,17 +326,9 @@ class TextoNoteItem(BaseNoteItem):
 
     def on_selected(self, selected: bool):
         self.handle.setVisible(selected)
-        # Al des-seleccionar, ocultar palette
-        if not selected and self.palette_cb:
-            # usamos el MainWindow vía parent() de scene in MainWindow; ocultaremos allí con selectionChanged
-            pass
 
     def mousePressEvent(self, event):
         self._resizing = self.handle.isVisible() and self.handle.contains(self.mapFromScene(event.scenePos()))
-        if not self._resizing and self.palette_cb:
-            scene_rect = self.mapToScene(self.boundingRect()).boundingRect()
-            cur = self.body_item.textCursor()
-            self.palette_cb(self.body_item, scene_rect, show_format=cur.hasSelection())
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -415,12 +346,6 @@ class TextoNoteItem(BaseNoteItem):
 
     def mouseReleaseEvent(self, event):
         self._resizing = False
-        # Si al soltar hay selección: mostrar formato automáticamente
-        if self.palette_cb:
-            cur = self.body_item.textCursor()
-            if cur and cur.hasSelection():
-                scene_rect = self.mapToScene(self.boundingRect()).boundingRect()
-                self.palette_cb(self.body_item, scene_rect, show_format=True)
         super().mouseReleaseEvent(event)
 
     def contextMenuEvent(self, event):
@@ -438,11 +363,7 @@ class TextoNoteItem(BaseNoteItem):
         elif chosen == act_cut: self.request_cut.emit(self.note.id)
 
     def _copy_plain(self):
-        cur = self.body_item.textCursor()
-        if cur and cur.hasSelection():
-            txt = cur.selectedText().replace("\u2029", "\n")
-        else:
-            txt = self.body_item.toPlainText()
+        txt = self.body_item.toPlainText()
         QGuiApplication.clipboard().setText(txt)
 
     def _bump_font(self, delta: int):
@@ -575,14 +496,6 @@ class BoardScene(QGraphicsScene):
     request_new_idea = Signal(QPointF)
     request_new_texto = Signal(QPointF)
     request_paste = Signal(QPointF)
-    request_hide_palette = Signal()
-
-    def mousePressEvent(self, event):
-        # Si clic en vacío o sobre algo que no sea texto -> ocultar palette
-        it = self.itemAt(event.scenePos(), self.views()[0].transform()) if self.views() else None
-        if not (isinstance(it, QGraphicsTextItem) or isinstance(it, TextoNoteItem)):
-            self.request_hide_palette.emit()
-        super().mousePressEvent(event)
 
     def contextMenuEvent(self, event):
         item = self.itemAt(event.scenePos(), self.views()[0].transform()) if self.views() else None
@@ -630,6 +543,15 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("WhiteBoard — PySide6")
         self.resize(1280, 800)
 
+        # Iconos de ventana (.ico o .png en /assets  dentro de la carpeta de datos)
+        ico_abs = os.path.join(ASSETS_DIR, "app.ico")
+        png_abs = os.path.join(ASSETS_DIR, "app.png")
+        if os.path.exists(ico_abs):
+            self.setWindowIcon(QIcon(ico_abs))
+        elif os.path.exists(png_abs):
+            self.setWindowIcon(QIcon(png_abs))
+        # Nota: para que el .exe tenga icono, compila con PyInstaller usando --icon assets/app.ico
+
         try: self.project = load_project()
         except Exception: self.project = empty_project()
 
@@ -654,23 +576,16 @@ class MainWindow(QMainWindow):
         self.status = QStatusBar(self); self.setStatusBar(self.status)
         self._setup_centered_footer("© 2025 Gabriel Golker")
 
-        # Popup emojis/format
-        self.palette = PalettePopup(self)
-
         # Conexiones
         self.scene.request_new_idea.connect(self.create_idea_at)
         self.scene.request_new_texto.connect(self.create_texto_at)
-        self.scene.request_paste.connect(self.paste_at)
+        self.scene.request_paste.connect(lambda p: self.paste_at(p))  # click derecho "Pegar"
         self.view.dropped_files.connect(self.handle_dropped_files)
-        self.scene.request_hide_palette.connect(self._hide_palette)
-
-        # Ocultar palette al cambiar selección a algo que no sea Texto
-        self.scene.selectionChanged.connect(self._on_selection_changed)
 
         # Shortcuts
         self.addAction(self._shortcut("Ctrl+X", self.cut_selected))
         self.addAction(self._shortcut("Ctrl+C", self.copy_selected))
-        self.addAction(self._shortcut("Ctrl+V", lambda: self.paste_at(None)))
+        self.addAction(self._shortcut("Ctrl+V", lambda: self.paste_at(None)))  # Pegar (incluye imágenes del portapapeles)
 
         self.refresh_board()
 
@@ -684,16 +599,6 @@ class MainWindow(QMainWindow):
         left = QLabel(""); mid = QLabel(text); right = QLabel("")
         mid.setAlignment(Qt.AlignCenter)
         self.status.addWidget(left,1); self.status.addWidget(mid,0); self.status.addWidget(right,1)
-
-    def _hide_palette(self):
-        self.palette.hide_if_showing()
-
-    def _on_selection_changed(self):
-        # Si la selección actual no contiene un Texto, ocultar palette
-        for it in self.scene.selectedItems():
-            if isinstance(it, TextoNoteItem):
-                return
-        self._hide_palette()
 
     # navegación
     def go_to_board(self, board_id: str, push_history: bool = True):
@@ -738,7 +643,6 @@ class MainWindow(QMainWindow):
     # escena
     def clear_scene(self):
         self.scene.clear()
-        self._hide_palette()
 
     def refresh_board(self):
         self.clear_scene()
@@ -765,7 +669,7 @@ class MainWindow(QMainWindow):
         if n.type == "idea":
             it = IdeaNoteItem(n)
         elif n.type == "texto":
-            it = TextoNoteItem(n, palette_cb=self._show_palette_above_note)
+            it = TextoNoteItem(n)
         elif n.type == "image":
             it = ImageNoteItem(n)
         elif n.type == "audio":
@@ -774,14 +678,6 @@ class MainWindow(QMainWindow):
             return None
         self.scene.addItem(it)
         return it
-
-    # Popup handler
-    def _show_palette_above_note(self, qtext_item: QGraphicsTextItem, note_scene_rect: QRectF, show_format: bool):
-        if show_format:
-            self.palette.build_format()
-        else:
-            self.palette.build_emoji()
-        self.palette.show_above_note(qtext_item, note_scene_rect, show_format, self)
 
     # crear
     def create_idea_at(self, pos: QPointF):
@@ -800,7 +696,7 @@ class MainWindow(QMainWindow):
         b.items[nid] = note; b.items_order.append(nid)
         self.refresh_board(); self.autosave()
 
-    # DnD
+    # Drag & Drop desde el sistema
     def handle_dropped_files(self, files: List[str]):
         any_created = False
         for f in files:
@@ -818,16 +714,59 @@ class MainWindow(QMainWindow):
         else:
             self.status.showMessage("Formato no soportado", 2000)
 
-    def _create_image_note_from(self, src_path: str):
+    # Pegar (Ctrl+V): prioriza imagen del portapapeles; luego URLs de imagen; luego nuestro JSON
+    def paste_at(self, pos: Optional[QPointF]):
+        cb = QGuiApplication.clipboard()
+        md = cb.mimeData()
+        # 1) Imagen cruda en portapapeles
+        if md.hasImage():
+            img: QImage = md.imageData()
+            rel = save_qimage_into_assets(img, ".png")
+            if rel:
+                self._create_image_note_from_rel(rel, pos)
+                self.status.showMessage("Imagen pegada", 1500)
+                self.autosave()
+                return
+        # 2) URLs (p. ej. archivos de imagen copiados)
+        if md.hasUrls():
+            paths = [u.toLocalFile() for u in md.urls() if u.isLocalFile()]
+            any_img = False
+            for p in paths:
+                ext = pathlib.Path(p).suffix.lower()
+                if ext in [".png",".jpg",".jpeg",".gif",".webp"]:
+                    self._create_image_note_from(p, pos)
+                    any_img = True
+            if any_img:
+                self.autosave()
+                self.status.showMessage("Imagen(es) pegada(s)", 1500)
+                return
+        # 3) Nuestro formato de árbol (copiar/pegar notas)
+        clip = cb.text()
+        try:
+            data = json.loads(clip)
+            if isinstance(data, dict) and data.get("whiteboard_clip"):
+                self._paste_subtree(data["root"], self.current_board_id, pos)
+                self.refresh_board(); self.autosave()
+                return
+        except Exception:
+            pass
+        # Nada reconocido
+        self.status.showMessage("Nada que pegar aquí", 1200)
+
+    def _create_image_note_from_rel(self, rel: str, pos: Optional[QPointF]):
+        b = self.project.boards[self.current_board_id]
+        nid = new_id()
+        x, y = (pos.x(), pos.y()) if pos else (40, 40)
+        note = Note(id=nid, type="image", pos=(x, y), size=(320,220))
+        note.payload.image_asset = rel
+        b.items[nid]=note; b.items_order.append(nid)
+        self.refresh_board()
+
+    def _create_image_note_from(self, src_path: str, pos: Optional[QPointF]=None):
         rel = copy_into_assets(src_path)
         if not rel:
             self.status.showMessage("No se pudo copiar imagen", 2000); return
-        b = self.project.boards[self.current_board_id]
-        nid = new_id()
-        note = Note(id=nid, type="image", pos=(40,40), size=(320,220))
-        note.payload.image_asset = rel
-        b.items[nid]=note; b.items_order.append(nid)
-        self.refresh_board(); self.autosave()
+        self._create_image_note_from_rel(rel, pos)
 
     def _create_audio_note_from(self, src_path: str):
         rel = copy_into_assets(src_path)
@@ -898,7 +837,7 @@ class MainWindow(QMainWindow):
         child.items[dragged_id] = src; child.items_order.append(dragged_id)
         self.refresh_board(); self.autosave()
 
-    # clipboard
+    # clipboard (copiar/cortar/pegar de notas como árbol)
     def _selected_note_id(self) -> Optional[str]:
         for it in self.scene.selectedItems():
             if isinstance(it, BaseNoteItem): return it.note.id
@@ -920,14 +859,6 @@ class MainWindow(QMainWindow):
 
     def cut_note(self, note_id: str):
         self.copy_note(note_id); self.delete_note(note_id)
-
-    def paste_at(self, pos: Optional[QPointF]):
-        clip = QGuiApplication.clipboard().text()
-        try: data = json.loads(clip)
-        except Exception: return
-        if not isinstance(data, dict) or not data.get("whiteboard_clip"): return
-        self._paste_subtree(data["root"], self.current_board_id, pos)
-        self.refresh_board(); self.autosave()
 
     def _collect_subtree(self, note: Note) -> dict:
         node = {
