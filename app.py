@@ -2,9 +2,9 @@ import sys, os, json, shutil, uuid, time, pathlib
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QRectF, QPointF, QTimer, QSizeF, Signal, QObject, QUrl
+from PySide6.QtCore import Qt, QRectF, QPointF, QTimer, Signal, QUrl
 from PySide6.QtGui import (
-    QAction, QBrush, QColor, QFont, QGuiApplication, QKeySequence, QPixmap,
+    QAction, QBrush, QColor, QFont, QGuiApplication, QKeySequence, QPixmap
 )
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QStatusBar, QLabel, QToolBar, QStyle,
@@ -14,46 +14,45 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
-# --- QDarkStyle (tema oscuro para PySide6) ---
+# ---- Tema oscuro
 try:
     import qdarkstyle
     QDARKSTYLE_OK = True
 except Exception:
     QDARKSTYLE_OK = False
 
-# -----------------------------
-# Utilidades / almacenamiento
-# -----------------------------
+# ---- Almacenamiento
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "WhiteBoard")
 AUTOSAVE_JSON = os.path.join(APP_DIR, "last.json")
 ASSETS_DIR = os.path.join(APP_DIR, "assets")
 os.makedirs(ASSETS_DIR, exist_ok=True)
 
-def new_id() -> str:
-    return uuid.uuid4().hex
+def new_id() -> str: return uuid.uuid4().hex
 
 def copy_into_assets(src_path: str) -> str:
-    if not src_path or not os.path.exists(src_path):
+    try:
+        if not src_path:
+            return ""
+        src_path = os.path.normpath(src_path)
+        if not os.path.exists(src_path):
+            return ""
+        ext = pathlib.Path(src_path).suffix.lower()
+        rel = f"{new_id()}{ext}"
+        shutil.copy2(src_path, os.path.join(ASSETS_DIR, rel))
+        return rel
+    except Exception as e:
+        print("[assets] copy error:", e)
         return ""
-    ext = pathlib.Path(src_path).suffix.lower()
-    dst_rel = f"{new_id()}{ext}"
-    shutil.copy2(src_path, os.path.join(ASSETS_DIR, dst_rel))
-    return dst_rel
 
-# -----------------------------
-# Modelo de datos
-# -----------------------------
+# ---- Modelo
 @dataclass
 class NotePayload:
-    # IDEA
-    title: str = ""
-    subtitle: str = ""
-    # TEXTO
-    body: str = ""
-    font_pt: int = 12
-    # MEDIA
-    audio_asset: str = ""   # assets/<id>.mp3|wav
-    image_asset: str = ""   # assets/<id>.png|jpg|...
+    title: str = ""      # idea
+    subtitle: str = ""   # idea
+    body: str = ""       # texto
+    font_pt: int = 12    # texto
+    audio_asset: str = ""
+    image_asset: str = ""
     volume: int = 100
 
 @dataclass
@@ -63,7 +62,7 @@ class Note:
     pos: Tuple[float, float] = (0.0, 0.0)
     size: Tuple[float, float] = (260.0, 140.0)
     z: int = 0
-    child_board_id: Optional[str] = None  # solo válido para "idea"
+    child_board_id: Optional[str] = None  # solo para idea
     payload: NotePayload = field(default_factory=NotePayload)
 
 @dataclass
@@ -89,20 +88,15 @@ def empty_project() -> Project:
 def save_project(p: Project, path: str = AUTOSAVE_JSON) -> None:
     os.makedirs(APP_DIR, exist_ok=True)
     serial = {
-        "version": p.version,
-        "project_id": p.project_id,
-        "root_board_id": p.root_board_id,
-        "last_opened": time.time(),
-        "boards": {},
+        "version": p.version, "project_id": p.project_id, "root_board_id": p.root_board_id,
+        "last_opened": time.time(), "boards": {}
     }
     for bid, b in p.boards.items():
-        serial["boards"][bid] = {
-            "id": b.id, "title": b.title, "items_order": b.items_order, "items": {}
-        }
+        serial["boards"][bid] = {"id": b.id, "title": b.title, "items_order": b.items_order, "items": {}}
         for nid, n in b.items.items():
             serial["boards"][bid]["items"][nid] = {
-                "id": n.id, "type": n.type, "pos": list(n.pos), "size": list(n.size),
-                "z": n.z, "child_board_id": n.child_board_id if n.type=="idea" else None,
+                "id": n.id, "type": n.type, "pos": list(n.pos), "size": list(n.size), "z": n.z,
+                "child_board_id": n.child_board_id if n.type == "idea" else None,
                 "payload": {
                     "title": n.payload.title, "subtitle": n.payload.subtitle,
                     "body": n.payload.body, "font_pt": n.payload.font_pt,
@@ -122,38 +116,34 @@ def load_project(path: str = AUTOSAVE_JSON) -> Project:
     for bid, bd in data["boards"].items():
         items = {}
         for nid, nd in bd["items"].items():
-            payload = NotePayload(
+            p = NotePayload(
                 title=nd["payload"].get("title",""),
                 subtitle=nd["payload"].get("subtitle",""),
                 body=nd["payload"].get("body",""),
-                font_pt=int(nd["payload"].get("font_pt", 12)),
+                font_pt=int(nd["payload"].get("font_pt",12)),
                 audio_asset=nd["payload"].get("audio_asset",""),
                 image_asset=nd["payload"].get("image_asset",""),
                 volume=int(nd["payload"].get("volume",100)),
             )
             items[nid] = Note(
                 id=nd["id"], type=nd["type"], pos=tuple(nd["pos"]), size=tuple(nd["size"]),
-                z=int(nd["z"]),
-                child_board_id=nd.get("child_board_id") if nd["type"]=="idea" else None,
-                payload=payload
+                z=int(nd["z"]), child_board_id=nd.get("child_board_id") if nd["type"]=="idea" else None,
+                payload=p
             )
         boards[bid] = Board(id=bd["id"], title=bd.get("title","Pizarra"),
                             items_order=bd.get("items_order", list(items.keys())), items=items)
-    return Project(version=int(data.get("version",3)),
-                   project_id=data.get("project_id", new_id()),
+    return Project(version=int(data.get("version",3)), project_id=data.get("project_id", new_id()),
                    root_board_id=data["root_board_id"], boards=boards,
                    last_opened=float(data.get("last_opened", time.time())))
 
-# -----------------------------
-# Items visuales (QGraphics)
-# -----------------------------
+# ---- Items visuales
 class BaseNoteItem(QGraphicsRectItem):
-    request_open_child = Signal(str)      # note_id (solo idea)
-    request_delete = Signal(str)          # note_id
-    request_nest_into = Signal(str, str)  # dragged_note_id, target_note_id
-    request_copy = Signal(str)            # note_id
-    request_cut = Signal(str)             # note_id
-    request_edit = Signal(str)            # note_id
+    request_open_child = Signal(str)      # idea -> abrir subpizarra
+    request_delete = Signal(str)
+    request_nest_into = Signal(str, str)  # dragged_id, target_id
+    request_copy = Signal(str)
+    request_cut = Signal(str)
+    request_edit = Signal(str)
 
     def __init__(self, note: Note):
         super().__init__()
@@ -169,33 +159,28 @@ class BaseNoteItem(QGraphicsRectItem):
         self.setAcceptHoverEvents(True)
         self._hovering = False
 
-    # Menú contextual estándar para todas las notas
-    def contextMenuEvent(self, event):
+    def _common_menu(self, with_open: bool):
         menu = QMenu()
         act_edit = menu.addAction("Editar")
-        # Entrar solo si es idea
-        if self.note.type == "idea":
+        act_open = None
+        if with_open:
             act_open = menu.addAction("Entrar (doble clic)")
         act_del = menu.addAction("Eliminar")
         menu.addSeparator()
         act_cut = menu.addAction("Cortar")
         act_copy = menu.addAction("Copiar")
-        chosen = menu.exec(event.screenPos())
-        if chosen == act_edit:
-            self.request_edit.emit(self.note.id)
-        elif self.note.type == "idea" and chosen and chosen.text().startswith("Entrar"):
-            self.request_open_child.emit(self.note.id)
-        elif chosen == act_del:
-            self.request_delete.emit(self.note.id)
-        elif chosen == act_copy:
-            self.request_copy.emit(self.note.id)
-        elif chosen == act_cut:
-            self.request_cut.emit(self.note.id)
+        return menu, act_edit, act_open, act_del, act_cut, act_copy
 
-    def mouseDoubleClickEvent(self, event):
-        if self.note.type == "idea":
-            self.request_open_child.emit(self.note.id)
-        super().mouseDoubleClickEvent(event)
+    def mouseReleaseEvent(self, event):
+        # si suelto encima de una IDEA -> anidar
+        scene = self.scene()
+        if scene:
+            items = scene.items(self.mapToScene(self.boundingRect().center()))
+            for it in items:
+                if isinstance(it, BaseNoteItem) and it is not self and it.note.type == "idea":
+                    self.request_nest_into.emit(self.note.id, it.note.id)
+                    break
+        super().mouseReleaseEvent(event)
 
     def hoverEnterEvent(self, e): self._hovering=True; self.update(); super().hoverEnterEvent(e)
     def hoverLeaveEvent(self, e): self._hovering=False; self.update(); super().hoverLeaveEvent(e)
@@ -208,28 +193,17 @@ class BaseNoteItem(QGraphicsRectItem):
         painter.setPen(color)
         super().paint(painter, option, widget)
 
-    def mouseReleaseEvent(self, event):
-        # Detectar drop sobre otra **idea** para anidar en su subpizarra
-        scene = self.scene()
-        if scene:
-            items = scene.items(self.mapToScene(self.boundingRect().center()))
-            for it in items:
-                if isinstance(it, BaseNoteItem) and it is not self and it.note.type == "idea":
-                    self.request_nest_into.emit(self.note.id, it.note.id)
-                    break
-        super().mouseReleaseEvent(event)
-
-# ---- Nota IDEA (título + subtítulo, con subpizarra)
 class IdeaNoteItem(BaseNoteItem):
     def __init__(self, note: Note):
         super().__init__(note)
+        # título
         self.title_item = QGraphicsTextItem(note.payload.title, self)
         f1 = QFont(); f1.setPointSize(12); f1.setBold(True)
         self.title_item.setFont(f1)
         self.title_item.setTextInteractionFlags(Qt.TextEditorInteraction)
         self.title_item.setDefaultTextColor(QColor("white"))
         self.title_item.setPos(8, 8)
-
+        # subtítulo
         self.subtitle_item = QGraphicsTextItem(note.payload.subtitle, self)
         f2 = QFont(); f2.setPointSize(9)
         self.subtitle_item.setFont(f2)
@@ -241,45 +215,55 @@ class IdeaNoteItem(BaseNoteItem):
         self.note.payload.title = self.title_item.toPlainText()
         self.note.payload.subtitle = self.subtitle_item.toPlainText()
 
-# ---- Nota TEXTO (puro texto, sin subpizarra) + resize + font +/- + reflow
-class TextoNoteItem(BaseNoteItem):
-    RESIZE_HANDLE_SIZE = 12
+    def contextMenuEvent(self, event):
+        menu, act_edit, act_open, act_del, act_cut, act_copy = self._common_menu(with_open=True)
+        chosen = menu.exec(event.screenPos())
+        if chosen == act_edit:
+            self.request_edit.emit(self.note.id)
+        elif act_open and chosen == act_open:
+            self.request_open_child.emit(self.note.id)
+        elif chosen == act_del:
+            self.request_delete.emit(self.note.id)
+        elif chosen == act_copy:
+            self.request_copy.emit(self.note.id)
+        elif chosen == act_cut:
+            self.request_cut.emit(self.note.id)
 
+    # **Fuerzo** doble-clic: siempre abrir, aunque se haga sobre el texto
+    def mouseDoubleClickEvent(self, event):
+        self.request_open_child.emit(self.note.id)
+
+class TextoNoteItem(BaseNoteItem):
+    RESIZE_HANDLE = 12
     def __init__(self, note: Note):
         super().__init__(note)
         self.body_item = QGraphicsTextItem(note.payload.body, self)
         self.body_item.setTextInteractionFlags(Qt.TextEditorInteraction)
         self.body_item.setDefaultTextColor(QColor("#eaeaea"))
-        f = QFont(); f.setPointSize(max(6, note.payload.font_pt))
-        self.body_item.setFont(f)
-        self._padding = 8
+        f = QFont(); f.setPointSize(max(6, note.payload.font_pt)); self.body_item.setFont(f)
+        self._pad = 8
         self._apply_text_width()
-
-        # Mini handle de resize en esquina inferior derecha
+        # handle resize
         self.handle = QGraphicsRectItem(self)
-        self.handle.setRect(
-            self.rect().right()-self.RESIZE_HANDLE_SIZE,
-            self.rect().bottom()-self.RESIZE_HANDLE_SIZE,
-            self.RESIZE_HANDLE_SIZE, self.RESIZE_HANDLE_SIZE
-        )
+        self._reposition_handle()
+
+    def _reposition_handle(self):
+        r = self.rect()
+        self.handle.setRect(r.right()-self.RESIZE_HANDLE, r.bottom()-self.RESIZE_HANDLE,
+                            self.RESIZE_HANDLE, self.RESIZE_HANDLE)
         self.handle.setBrush(QBrush(QColor(180,180,180)))
         self.handle.setFlags(QGraphicsRectItem.ItemIsMovable | QGraphicsRectItem.ItemIgnoresTransformations)
         self.handle.setZValue(self.zValue()+1)
 
     def _apply_text_width(self):
-        w = max(120, self.rect().width() - 2*self._padding)
+        w = max(120, self.rect().width() - 2*self._pad)
         self.body_item.setTextWidth(w)
-        self.body_item.setPos(self._padding, self._padding)
+        self.body_item.setPos(self._pad, self._pad)
 
     def contextMenuEvent(self, event):
-        menu = QMenu()
-        act_edit = menu.addAction("Editar")
+        menu, act_edit, _act_open, act_del, act_cut, act_copy = self._common_menu(with_open=False)
         act_bigger = menu.addAction("Aumentar tamaño texto")
         act_smaller = menu.addAction("Reducir tamaño texto")
-        act_del = menu.addAction("Eliminar")
-        menu.addSeparator()
-        act_cut = menu.addAction("Cortar")
-        act_copy = menu.addAction("Copiar")
         chosen = menu.exec(event.screenPos())
         if chosen == act_edit:
             self.request_edit.emit(self.note.id)
@@ -304,18 +288,13 @@ class TextoNoteItem(BaseNoteItem):
         self.update()
 
     def mouseMoveEvent(self, event):
-        # si estás arrastrando el handle, redimensiona
         if self.handle.isUnderMouse():
             p = event.scenePos()
             tl = self.mapToScene(self.rect().topLeft())
             new_w = max(160, p.x() - tl.x())
             new_h = max(80, p.y() - tl.y())
-            r = QRectF(0, 0, new_w, new_h)
-            self.setRect(r)
-            # recolocar handle
-            self.handle.setRect(r.right()-self.RESIZE_HANDLE_SIZE, r.bottom()-self.RESIZE_HANDLE_SIZE,
-                                self.RESIZE_HANDLE_SIZE, self.RESIZE_HANDLE_SIZE)
-            # reflow
+            self.setRect(QRectF(0,0,new_w,new_h))
+            self._reposition_handle()
             self._apply_text_width()
             self.note.size = (new_w, new_h)
         else:
@@ -325,7 +304,6 @@ class TextoNoteItem(BaseNoteItem):
         self.note.payload.body = self.body_item.toPlainText()
         super().focusOutEvent(event)
 
-# ---- Nota IMAGEN
 class ImageNoteItem(BaseNoteItem):
     def __init__(self, note: Note):
         super().__init__(note)
@@ -334,20 +312,18 @@ class ImageNoteItem(BaseNoteItem):
             abs_path = os.path.join(ASSETS_DIR, note.payload.image_asset)
             if os.path.exists(abs_path):
                 self.pix.setPixmap(QPixmap(abs_path).scaled(
-                    int(note.size[0]-4), int(note.size[1]-28), Qt.KeepAspectRatio, Qt.SmoothTransformation
+                    int(note.size[0]-4), int(note.size[1]-28),
+                    Qt.KeepAspectRatio, Qt.SmoothTransformation
                 ))
-        self.pix.setPos(2, 24)
-        label = QGraphicsTextItem("Imagen", self)
-        label.setDefaultTextColor(QColor("#aaaaaa"))
-        label.setPos(8, 4)
+        self.pix.setPos(2,24)
+        label = QGraphicsTextItem("Imagen", self); label.setDefaultTextColor(QColor("#aaaaaa")); label.setPos(8,4)
 
-# ---- Nota AUDIO
 class AudioWidget(QWidget):
     def __init__(self, abs_audio_path: str, init_volume: int = 100, parent=None):
         super().__init__(parent)
         self.player = QMediaPlayer(self); self.audio = QAudioOutput(self)
         self.player.setAudioOutput(self.audio)
-        self.player.setSource(QUrl.fromLocalFile(abs_audio_path))
+        if abs_audio_path: self.player.setSource(QUrl.fromLocalFile(abs_audio_path))
         self.audio.setVolume(max(0.0, min(1.0, init_volume/100.0)))
         lay = QHBoxLayout(self); lay.setContentsMargins(6,6,6,6)
         self.btn = QPushButton("Play", self); self.btn.clicked.connect(self.toggle)
@@ -364,22 +340,18 @@ class AudioWidget(QWidget):
 class AudioNoteItem(BaseNoteItem):
     def __init__(self, note: Note):
         super().__init__(note)
-        label = QGraphicsTextItem("Audio", self)
-        label.setDefaultTextColor(QColor("#aaaaaa"))
-        label.setPos(8, 4)
+        label = QGraphicsTextItem("Audio", self); label.setDefaultTextColor(QColor("#aaaaaa")); label.setPos(8,4)
         abs_path = os.path.join(ASSETS_DIR, note.payload.audio_asset) if note.payload.audio_asset else ""
         self.widget = AudioWidget(abs_path, note.payload.volume)
-        self.proxy = QGraphicsProxyWidget(self); self.proxy.setWidget(self.widget)
-        self.proxy.setPos(8, 28)
+        self.proxy = QGraphicsProxyWidget(self); self.proxy.setWidget(self.widget); self.proxy.setPos(8,28)
         self.setRect(QRectF(0,0,max(260, self.proxy.size().width()+16), 110))
 
-# -----------------------------
-# Escena / Vista
-# -----------------------------
+# ---- Escena/Vista
 class BoardScene(QGraphicsScene):
     request_new_idea = Signal(QPointF)
     request_new_texto = Signal(QPointF)
     request_paste = Signal(QPointF)
+
     def contextMenuEvent(self, event):
         item = self.itemAt(event.scenePos(), self.views()[0].transform()) if self.views() else None
         if not item:
@@ -395,30 +367,36 @@ class BoardScene(QGraphicsScene):
             super().contextMenuEvent(event)
 
 class BoardView(QGraphicsView):
-    dropped_files = Signal(list)  # rutas
+    dropped_files = Signal(list)
     def __init__(self, scene: BoardScene, parent=None):
         super().__init__(scene, parent)
         self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)  # <- importante en Windows
         self.setDragMode(QGraphicsView.RubberBandDrag)
-    def dragEnterEvent(self, e): e.acceptProposedAction() if e.mimeData().hasUrls() else super().dragEnterEvent(e)
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasUrls(): e.acceptProposedAction()
+        else: super().dragEnterEvent(e)
     def dragMoveEvent(self, e): e.acceptProposedAction()
     def dropEvent(self, e):
-        if e.mimeData().hasUrls():
-            files = [u.toLocalFile() for u in e.mimeData().urls() if u.isLocalFile()]
-            if files: self.dropped_files.emit(files)
-            e.acceptProposedAction()
-        else: super().dropEvent(e)
+        try:
+            if e.mimeData().hasUrls():
+                files = []
+                for u in e.mimeData().urls():
+                    if u.isLocalFile(): files.append(os.path.normpath(u.toLocalFile()))
+                if files: self.dropped_files.emit(files)
+                e.acceptProposedAction()
+            else:
+                super().dropEvent(e)
+        except Exception as err:
+            print("[drop] error:", err)
 
-# -----------------------------
-# Ventana principal
-# -----------------------------
+# ---- MainWindow
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("WhiteBoard — PySide6")
         self.resize(1280, 800)
 
-        # Autoload
         try: self.project = load_project()
         except Exception: self.project = empty_project()
 
@@ -440,7 +418,8 @@ class MainWindow(QMainWindow):
         self.scene = BoardScene(self); self.view = BoardView(self.scene, self); self.setCentralWidget(self.view)
 
         # Footer
-        self.status = QStatusBar(self); self.setStatusBar(self.status); self._setup_centered_footer("© 2025 Gabriel Golker")
+        self.status = QStatusBar(self); self.setStatusBar(self.status)
+        self._setup_centered_footer("© 2025 Gabriel Golker")
 
         # Conexiones
         self.scene.request_new_idea.connect(self.create_idea_at)
@@ -459,9 +438,10 @@ class MainWindow(QMainWindow):
 
         self.refresh_board()
 
-    # Helpers UI
+    # helpers
     def _shortcut(self, seq: str, fn):
         act = QAction(self); act.setShortcut(QKeySequence(seq)); act.triggered.connect(fn); return act
+
     def _setup_centered_footer(self, text: str):
         for w in self.status.children():
             if isinstance(w, QWidget) and w is not self.status: w.setParent(None)
@@ -469,125 +449,155 @@ class MainWindow(QMainWindow):
         mid.setAlignment(Qt.AlignCenter)
         self.status.addWidget(left,1); self.status.addWidget(mid,0); self.status.addWidget(right,1)
 
-    # Navegación
+    # navegación
     def go_to_board(self, board_id: str, push_history: bool = True):
         if push_history and board_id != self.current_board_id:
             self.back_stack.append(self.current_board_id); self.forward_stack.clear()
-        self.current_board_id = board_id; self._push_mru(board_id); self.refresh_board()
+        self.current_board_id = board_id
+        self._push_mru(board_id)
+        self.refresh_board()
 
     def go_back(self):
         if not self.back_stack: return
-        prev = self.back_stack.pop(); self.forward_stack.append(self.current_board_id)
-        self.current_board_id = prev; self._push_mru(prev); self.refresh_board()
+        prev = self.back_stack.pop()
+        self.forward_stack.append(self.current_board_id)
+        self.current_board_id = prev
+        self._push_mru(prev)
+        self.refresh_board()
 
     def go_forward(self):
         if not self.forward_stack: return
-        nxt = self.forward_stack.pop(); self.back_stack.append(self.current_board_id)
-        self.current_board_id = nxt; self._push_mru(nxt); self.refresh_board()
+        nxt = self.forward_stack.pop()
+        self.back_stack.append(self.current_board_id)
+        self.current_board_id = nxt
+        self._push_mru(nxt)
+        self.refresh_board()
 
     def _push_mru(self, bid: str):
         if bid in self.mru: self.mru.remove(bid)
         self.mru.insert(0, bid); self.mru = self.mru[:12]
         self.menu_history.clear()
-        for b in self.mru:
-            title = self.project.boards.get(b, Board(b)).title or b[:6]
-            act = QAction(title, self); act.triggered.connect(lambda _=False, x=b: self.go_to_board(x, True))
+        for bid2 in self.mru:
+            title = self.project.boards.get(bid2, Board(bid2)).title or bid2[:6]
+            act = QAction(title, self)
+            # CUIDADO: capturar valor actual
+            act.triggered.connect(lambda _=False, b=bid2: self.go_to_board(b, True))
             self.menu_history.addAction(act)
 
     def _update_breadcrumb(self):
-        if self.current_board_id == self.project.root_board_id: self.breadcrumb.setText("Raíz"); return
-        self.breadcrumb.setText("… > (pizarra)")
+        self.breadcrumb.setText("Raíz" if self.current_board_id == self.project.root_board_id else "… > (pizarra)")
 
-    # Pintar
+    # escena
     def clear_scene(self): self.scene.clear()
 
     def refresh_board(self):
         self.clear_scene()
         board = self.project.boards[self.current_board_id]
         order = board.items_order or list(board.items.keys())
-        for nid in order:
-            n = board.items.get(nid); 
-            if not n: continue
+        for nid in list(order):
+            n = board.items.get(nid)
+            if not n: 
+                try: order.remove(nid)
+                except: pass
+                continue
             item = self._create_item(n)
             if item:
-                item.request_open_child.connect(self.open_child_of_note)
-                item.request_delete.connect(self.delete_note)
+                # capturas seguras por defecto de arg
+                item.request_open_child.connect(lambda note_id=n.id: self.open_child_of_note(note_id))
+                item.request_delete.connect(lambda note_id=n.id: self.delete_note(note_id))
                 item.request_nest_into.connect(self.nest_note_into)
-                item.request_copy.connect(lambda nid=n.id: self.copy_note(nid))
-                item.request_cut.connect(lambda nid=n.id: self.cut_note(nid))
-                item.request_edit.connect(lambda nid=n.id: self.edit_note(nid))
+                item.request_copy.connect(lambda note_id=n.id: self.copy_note(note_id))
+                item.request_cut.connect(lambda note_id=n.id: self.cut_note(note_id))
+                item.request_edit.connect(lambda note_id=n.id: self.edit_note(note_id))
         self._update_breadcrumb()
 
     def _create_item(self, n: Note) -> Optional[BaseNoteItem]:
-        if n.type == "idea":   it = IdeaNoteItem(n)
+        it = None
+        if n.type == "idea": it = IdeaNoteItem(n)
         elif n.type == "texto": it = TextoNoteItem(n)
         elif n.type == "image": it = ImageNoteItem(n)
         elif n.type == "audio": it = AudioNoteItem(n)
-        else: return None
-        self.scene.addItem(it); return it
+        if it: self.scene.addItem(it)
+        return it
 
-    # Crear notas
+    # crear
     def create_idea_at(self, pos: QPointF):
-        board = self.project.boards[self.current_board_id]
+        b = self.project.boards[self.current_board_id]
         nid = new_id()
         note = Note(id=nid, type="idea", pos=(pos.x(), pos.y()))
         note.payload.title = "Idea"; note.payload.subtitle = "Descripción…"
-        board.items[nid] = note; board.items_order.append(nid)
-        self.refresh_board(); self.autosave()
+        b.items[nid] = note; b.items_order.append(nid)
+        self.refresh_board(); self.autosave(); self.status.showMessage("Idea creada", 1500)
 
     def create_texto_at(self, pos: QPointF):
-        board = self.project.boards[self.current_board_id]
+        b = self.project.boards[self.current_board_id]
         nid = new_id()
         note = Note(id=nid, type="texto", pos=(pos.x(), pos.y()), size=(280,160))
         note.payload.body = "Escribe aquí…"; note.payload.font_pt = 12
-        board.items[nid] = note; board.items_order.append(nid)
-        self.refresh_board(); self.autosave()
+        b.items[nid] = note; b.items_order.append(nid)
+        self.refresh_board(); self.autosave(); self.status.showMessage("Texto creado", 1500)
 
-    # DnD de archivos
+    # DnD
     def handle_dropped_files(self, files: List[str]):
+        any_created = False
         for f in files:
-            ext = pathlib.Path(f).suffix.lower()
-            if ext in [".png",".jpg",".jpeg",".gif",".webp"]: self._create_image_note_from(f)
-            elif ext in [".mp3",".wav"]: self._create_audio_note_from(f)
-        self.autosave()
+            try:
+                ext = pathlib.Path(f).suffix.lower()
+                if ext in [".png",".jpg",".jpeg",".gif",".webp"]:
+                    self._create_image_note_from(f); any_created = True
+                elif ext in [".mp3",".wav"]:
+                    self._create_audio_note_from(f); any_created = True
+            except Exception as e:
+                print("[dnd] error with", f, e)
+        if any_created:
+            self.autosave()
+            self.status.showMessage("Recurso(s) añadido(s)", 1500)
+        else:
+            self.status.showMessage("Formato no soportado", 2000)
 
     def _create_image_note_from(self, src_path: str):
-        rel = copy_into_assets(src_path); board = self.project.boards[self.current_board_id]
+        rel = copy_into_assets(src_path)
+        if not rel:
+            self.status.showMessage("No se pudo copiar imagen", 2000); return
+        b = self.project.boards[self.current_board_id]
         nid = new_id()
         note = Note(id=nid, type="image", pos=(40,40), size=(320,220))
         note.payload.image_asset = rel
-        board.items[nid]=note; board.items_order.append(nid)
+        b.items[nid]=note; b.items_order.append(nid)
         self.refresh_board()
 
     def _create_audio_note_from(self, src_path: str):
-        rel = copy_into_assets(src_path); board = self.project.boards[self.current_board_id]
+        rel = copy_into_assets(src_path)
+        if not rel:
+            self.status.showMessage("No se pudo copiar audio", 2000); return
+        b = self.project.boards[self.current_board_id]
         nid = new_id()
         note = Note(id=nid, type="audio", pos=(60,60), size=(280,120))
         note.payload.audio_asset = rel; note.payload.volume = 100
-        board.items[nid]=note; board.items_order.append(nid)
+        b.items[nid]=note; b.items_order.append(nid)
         self.refresh_board()
 
-    # Editar nota
+    # editar
     def edit_note(self, note_id: str):
         b = self.project.boards[self.current_board_id]; n = b.items.get(note_id)
         if not n: return
-        # Para idea: foco en título; para texto: foco en el body
         for it in self.scene.items():
             if isinstance(it, IdeaNoteItem) and it.note.id==note_id:
                 it.title_item.setFocus(); return
             if isinstance(it, TextoNoteItem) and it.note.id==note_id:
                 it.body_item.setFocus(); return
 
-    # Entrar a subpizarra (solo idea)
+    # abrir subpizarra
     def open_child_of_note(self, note_id: str):
-        b = self.project.boards[self.current_board_id]; n = b.items[note_id]
-        if n.type != "idea": return
+        b = self.project.boards[self.current_board_id]; n = b.items.get(note_id)
+        if not n or n.type != "idea": return
         if not n.child_board_id:
             child_id = new_id(); n.child_board_id = child_id
             self.project.boards[child_id] = Board(id=child_id, title=n.payload.title or "Sub-pizarra")
-        self.go_to_board(n.child_board_id, push_history=True); self.autosave()
+        self.go_to_board(n.child_board_id, push_history=True)
+        self.autosave()
 
-    # Eliminar
+    # eliminar
     def delete_note(self, note_id: str):
         b = self.project.boards[self.current_board_id]; n = b.items.get(note_id)
         if not n: return
@@ -609,7 +619,7 @@ class MainWindow(QMainWindow):
                 self._delete_board_recursive(n.child_board_id)
         self.project.boards.pop(board_id, None)
 
-    # Anidar arrastrando: solo si target es IDEA
+    # anidar
     def nest_note_into(self, dragged_id: str, target_id: str):
         if dragged_id == target_id: return
         b = self.project.boards[self.current_board_id]
@@ -625,7 +635,7 @@ class MainWindow(QMainWindow):
         child.items[dragged_id] = src; child.items_order.append(dragged_id)
         self.refresh_board(); self.autosave()
 
-    # Clipboard
+    # portapapeles
     def _selected_note_id(self) -> Optional[str]:
         for it in self.scene.selectedItems():
             if isinstance(it, BaseNoteItem): return it.note.id
@@ -642,7 +652,7 @@ class MainWindow(QMainWindow):
     def copy_note(self, note_id: str):
         b = self.project.boards[self.current_board_id]; n = b.items.get(note_id)
         if not n: return
-        subtree = self._collect_subtree(n)  # solo idea tendrá children
+        subtree = self._collect_subtree(n)
         QGuiApplication.clipboard().setText(json.dumps({"whiteboard_clip": True, "root": subtree}))
 
     def cut_note(self, note_id: str):
@@ -679,9 +689,7 @@ class MainWindow(QMainWindow):
         b = self.project.boards[board_id]
         nid = new_id()
         pld = node["note"]["payload"]
-        # duplicar assets si aplica
-        audio_asset = ""
-        image_asset = ""
+        audio_asset = image_asset = ""
         if pld.get("audio_asset"):
             src = os.path.join(ASSETS_DIR, pld["audio_asset"])
             if os.path.exists(src): audio_asset = copy_into_assets(src)
@@ -691,8 +699,7 @@ class MainWindow(QMainWindow):
         n = Note(
             id=nid, type=node["note"]["type"],
             pos=(pos.x(), pos.y()) if pos else (60,60),
-            size=tuple(node["note"].get("size", (260,140))),
-            z=int(node["note"].get("z", 0)),
+            size=tuple(node["note"].get("size", (260,140))), z=int(node["note"].get("z",0)),
             child_board_id=None,
             payload=NotePayload(
                 title=pld.get("title",""), subtitle=pld.get("subtitle",""),
@@ -701,18 +708,17 @@ class MainWindow(QMainWindow):
             )
         )
         b.items[nid]=n; b.items_order.append(nid)
-        # hijos solo si es idea
         if n.type=="idea" and node.get("children"):
             child_id = new_id(); n.child_board_id = child_id
             self.project.boards[child_id] = Board(id=child_id, title=n.payload.title or "Sub-pizarra")
             for ch in node["children"]:
                 self._paste_subtree(ch, child_id, None)
 
-    # Autosave
+    # autosave
     def autosave(self):
         try:
             save_project(self.project, AUTOSAVE_JSON)
-            self.status.showMessage("Guardado automáticamente", 2000)
+            self.status.showMessage("Guardado automáticamente", 1500)
         except Exception as e:
             self.status.showMessage(f"Error guardando: {e}", 4000)
 
@@ -726,3 +732,4 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
