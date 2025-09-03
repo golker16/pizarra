@@ -2,7 +2,7 @@ import sys, os, json, shutil, uuid, time, pathlib
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QRectF, QPointF, QTimer, Signal, QUrl
+from PySide6.QtCore import Qt, QRectF, QPointF, QTimer, Signal, QUrl, QObject
 from PySide6.QtGui import (
     QAction, QBrush, QColor, QFont, QGuiApplication, QKeySequence, QPixmap
 )
@@ -14,14 +14,14 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
-# ---- Tema oscuro
+# ---- QDarkStyle
 try:
     import qdarkstyle
     QDARKSTYLE_OK = True
 except Exception:
     QDARKSTYLE_OK = False
 
-# ---- Almacenamiento
+# ---- Storage
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "WhiteBoard")
 AUTOSAVE_JSON = os.path.join(APP_DIR, "last.json")
 ASSETS_DIR = os.path.join(APP_DIR, "assets")
@@ -44,13 +44,16 @@ def copy_into_assets(src_path: str) -> str:
         print("[assets] copy error:", e)
         return ""
 
-# ---- Modelo
+# ---- Model
 @dataclass
 class NotePayload:
-    title: str = ""      # idea
-    subtitle: str = ""   # idea
-    body: str = ""       # texto
-    font_pt: int = 12    # texto
+    # IDEA
+    title: str = ""
+    subtitle: str = ""
+    # TEXTO
+    body: str = ""
+    font_pt: int = 12
+    # MEDIA
     audio_asset: str = ""
     image_asset: str = ""
     volume: int = 100
@@ -136,8 +139,8 @@ def load_project(path: str = AUTOSAVE_JSON) -> Project:
                    root_board_id=data["root_board_id"], boards=boards,
                    last_opened=float(data.get("last_opened", time.time())))
 
-# ---- Items visuales
-class BaseNoteItem(QGraphicsRectItem):
+# ---- Graphics Items (QObject mixin for signals) ----
+class BaseNoteItem(QObject, QGraphicsRectItem):
     request_open_child = Signal(str)      # idea -> abrir subpizarra
     request_delete = Signal(str)
     request_nest_into = Signal(str, str)  # dragged_id, target_id
@@ -146,7 +149,8 @@ class BaseNoteItem(QGraphicsRectItem):
     request_edit = Signal(str)
 
     def __init__(self, note: Note):
-        super().__init__()
+        QObject.__init__(self)
+        QGraphicsRectItem.__init__(self)
         self.note = note
         self.setRect(QRectF(0, 0, note.size[0], note.size[1]))
         self.setPos(QPointF(note.pos[0], note.pos[1]))
@@ -229,7 +233,6 @@ class IdeaNoteItem(BaseNoteItem):
         elif chosen == act_cut:
             self.request_cut.emit(self.note.id)
 
-    # **Fuerzo** doble-clic: siempre abrir, aunque se haga sobre el texto
     def mouseDoubleClickEvent(self, event):
         self.request_open_child.emit(self.note.id)
 
@@ -346,7 +349,7 @@ class AudioNoteItem(BaseNoteItem):
         self.proxy = QGraphicsProxyWidget(self); self.proxy.setWidget(self.widget); self.proxy.setPos(8,28)
         self.setRect(QRectF(0,0,max(260, self.proxy.size().width()+16), 110))
 
-# ---- Escena/Vista
+# ---- Scene / View
 class BoardScene(QGraphicsScene):
     request_new_idea = Signal(QPointF)
     request_new_texto = Signal(QPointF)
@@ -371,7 +374,7 @@ class BoardView(QGraphicsView):
     def __init__(self, scene: BoardScene, parent=None):
         super().__init__(scene, parent)
         self.setAcceptDrops(True)
-        self.viewport().setAcceptDrops(True)  # <- importante en Windows
+        self.viewport().setAcceptDrops(True)
         self.setDragMode(QGraphicsView.RubberBandDrag)
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls(): e.acceptProposedAction()
@@ -414,20 +417,20 @@ class MainWindow(QMainWindow):
         self.menu_history = QMenu(self.btn_history); self.btn_history.setMenu(self.menu_history); self.toolbar.addWidget(self.btn_history)
         self.breadcrumb = QLabel("Raíz"); self.breadcrumb.setStyleSheet("font-weight:600; margin-left:12px;"); self.toolbar.addWidget(self.breadcrumb)
 
-        # Escena/Vista
+        # Scene/View
         self.scene = BoardScene(self); self.view = BoardView(self.scene, self); self.setCentralWidget(self.view)
 
         # Footer
         self.status = QStatusBar(self); self.setStatusBar(self.status)
         self._setup_centered_footer("© 2025 Gabriel Golker")
 
-        # Conexiones
+        # Connections
         self.scene.request_new_idea.connect(self.create_idea_at)
         self.scene.request_new_texto.connect(self.create_texto_at)
         self.scene.request_paste.connect(self.paste_at)
         self.view.dropped_files.connect(self.handle_dropped_files)
 
-        # Atajos
+        # Shortcuts
         self.addAction(self._shortcut("Ctrl+X", self.cut_selected))
         self.addAction(self._shortcut("Ctrl+C", self.copy_selected))
         self.addAction(self._shortcut("Ctrl+V", lambda: self.paste_at(None)))
@@ -480,7 +483,6 @@ class MainWindow(QMainWindow):
         for bid2 in self.mru:
             title = self.project.boards.get(bid2, Board(bid2)).title or bid2[:6]
             act = QAction(title, self)
-            # CUIDADO: capturar valor actual
             act.triggered.connect(lambda _=False, b=bid2: self.go_to_board(b, True))
             self.menu_history.addAction(act)
 
@@ -496,13 +498,13 @@ class MainWindow(QMainWindow):
         order = board.items_order or list(board.items.keys())
         for nid in list(order):
             n = board.items.get(nid)
-            if not n: 
+            if not n:
                 try: order.remove(nid)
                 except: pass
                 continue
             item = self._create_item(n)
             if item:
-                # capturas seguras por defecto de arg
+                # conexiones (usar closures seguros)
                 item.request_open_child.connect(lambda note_id=n.id: self.open_child_of_note(note_id))
                 item.request_delete.connect(lambda note_id=n.id: self.delete_note(note_id))
                 item.request_nest_into.connect(self.nest_note_into)
@@ -635,7 +637,7 @@ class MainWindow(QMainWindow):
         child.items[dragged_id] = src; child.items_order.append(dragged_id)
         self.refresh_board(); self.autosave()
 
-    # portapapeles
+    # clipboard
     def _selected_note_id(self) -> Optional[str]:
         for it in self.scene.selectedItems():
             if isinstance(it, BaseNoteItem): return it.note.id
@@ -732,4 +734,5 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
