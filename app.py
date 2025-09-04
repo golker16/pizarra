@@ -85,13 +85,29 @@ def find_runtime_asset(rel_path: str) -> Optional[str]:
             return p
     return None
 
+def _build_multisize_icon_from(path: str) -> QIcon:
+    """
+    Crea un QIcon con varias resoluciones (16/24/32/48/256).
+    Funciona con .ico o .png de origen.
+    """
+    base = QImage(path)
+    if base.isNull():
+        return QIcon(path)  # que Qt intente lo suyo
+    icon = QIcon()
+    for sz in (16, 24, 32, 48, 256):
+        scaled = QPixmap.fromImage(base.scaled(sz, sz, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        icon.addPixmap(scaled)
+    return icon
+
 def set_app_icon(app: QApplication):
-    ico = find_runtime_asset("app.ico")
-    png = find_runtime_asset("app.png")
-    if ico:
-        app.setWindowIcon(QIcon(ico))
-    elif png:
-        app.setWindowIcon(QIcon(png))
+    ico_path = find_runtime_asset("app.ico")
+    png_path = find_runtime_asset("app.png")
+    if ico_path:
+        icon = _build_multisize_icon_from(ico_path)
+        app.setWindowIcon(icon)
+    elif png_path:
+        icon = _build_multisize_icon_from(png_path)
+        app.setWindowIcon(icon)
 
 # ------------------ Modelo ------------------
 @dataclass
@@ -255,7 +271,7 @@ class BaseNoteItem(QObject, QGraphicsRectItem):
 
     def hoverLeaveEvent(self, e):
         self._hovering = False
-        self.update()
+               self.update()
         super().hoverLeaveEvent(e)
 
     def itemChange(self, change, value):
@@ -670,12 +686,12 @@ class MainWindow(QMainWindow):
         self.resize(1280, 800)
 
         # Icono por ventana (además del global)
-        ico = find_runtime_asset("app.ico")
-        png = find_runtime_asset("app.png")
-        if ico:
-            self.setWindowIcon(QIcon(ico))
-        elif png:
-            self.setWindowIcon(QIcon(png))
+        ico_path = find_runtime_asset("app.ico")
+        png_path = find_runtime_asset("app.png")
+        if ico_path:
+            self.setWindowIcon(_build_multisize_icon_from(ico_path))
+        elif png_path:
+            self.setWindowIcon(_build_multisize_icon_from(png_path))
 
         try:
             self.project = load_project()
@@ -1122,6 +1138,9 @@ class MainWindow(QMainWindow):
             self.status.showMessage(f"Error guardando: {e}", 3000)
 
 def main():
+    # Asegura pixmaps HiDPI (mejor para iconos pequeños)
+    QGuiApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+
     app = QApplication(sys.argv)
     set_app_icon(app)  # icono global
     if QDARKSTYLE_OK:
@@ -1135,6 +1154,7 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 
 
