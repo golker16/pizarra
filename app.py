@@ -65,21 +65,15 @@ def open_in_explorer(abs_path: str):
 
 # --------- utilidades de icono/runtime ----------
 def _runtime_base_dir() -> str:
-    # Cuando está empacado con PyInstaller, _MEIPASS apunta al dir temporal del bundle
     base = getattr(sys, "_MEIPASS", None)
     if base:
         return base
-    # Cuando se corre desde source o onedir
     return os.path.dirname(os.path.abspath(sys.argv[0]))
 
 def find_runtime_asset(rel_path: str) -> Optional[str]:
-    """
-    Busca primero en %APPDATA%/WhiteBoard/assets, luego junto al .exe en ./assets.
-    Devuelve ruta absoluta si existe.
-    """
     candidates = [
-        os.path.join(ASSETS_DIR, rel_path),                  # datos en roaming
-        os.path.join(_runtime_base_dir(), "assets", rel_path) # carpeta assets del build
+        os.path.join(ASSETS_DIR, rel_path),
+        os.path.join(_runtime_base_dir(), "assets", rel_path)
     ]
     for p in candidates:
         if os.path.exists(p):
@@ -211,6 +205,7 @@ class BaseNoteItem(QObject, QGraphicsRectItem):
         self.setAcceptHoverEvents(True)
         self._hovering = False
 
+    # Contorno sólo visible al seleccionar/hover (no borde negro permanente)
     def paint(self, painter, option, widget=None):
         if self.isSelected() or self._hovering:
             pen = QPen(QColor(160,160,160,200), 1, Qt.DashLine)
@@ -274,7 +269,7 @@ class IdeaNoteItem(BaseNoteItem):
 
     def _commit_and_dirty(self):
         self.note.payload.title = self.title_item.toPlainText()
-               self.note.payload.subtitle = self.subtitle_item.toPlainText()
+        self.note.payload.subtitle = self.subtitle_item.toPlainText()
         self.request_dirty.emit()
 
     def _reposition_handle(self):
@@ -324,7 +319,7 @@ class TextoNoteItem(BaseNoteItem):
         self._pad = 8
         self.body_item = QGraphicsTextItem(note.payload.body, self)
         self.body_item.setTextInteractionFlags(Qt.TextEditorInteraction)
-        self.body_item.setDefaultTextColor(QColor("#eaeaea"))
+               self.body_item.setDefaultTextColor(QColor("#eaeaea"))
         f = QFont(); f.setPointSize(max(6, note.payload.font_pt)); self.body_item.setFont(f)
         self.body_item.document().contentsChanged.connect(self._commit_and_dirty)
         self._apply_text_width()
@@ -566,7 +561,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("WhiteBoard — PySide6")
         self.resize(1280, 800)
 
-        # Fijar icono a nivel de ventana (además del global en QApplication)
+        # Icono por ventana (además del global en QApplication)
         ico = find_runtime_asset("app.ico")
         png = find_runtime_asset("app.png")
         if ico: self.setWindowIcon(QIcon(ico))
@@ -734,7 +729,7 @@ class MainWindow(QMainWindow):
         else:
             self.status.showMessage("Formato no soportado", 2000)
 
-    # Pegar (Ctrl+V): prioriza imagen; luego URLs; luego nuestro JSON
+    # Pegar (Ctrl+V): imagen > URLs > JSON de notas
     def paste_at(self, pos: Optional[QPointF]):
         cb = QGuiApplication.clipboard()
         md = cb.mimeData()
@@ -928,8 +923,7 @@ class MainWindow(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
-    # Fijamos icono global (algunos estilos lo toman del QApplication)
-    set_app_icon(app)
+    set_app_icon(app)  # icono global
     if QDARKSTYLE_OK:
         try: app.setStyleSheet(qdarkstyle.load_stylesheet(qt_api="pyside6"))
         except Exception: pass
@@ -938,6 +932,7 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 
 
