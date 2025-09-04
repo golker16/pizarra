@@ -1,4 +1,4 @@
-name: Build Windows EXE (PyInstaller onedir)
+name: Build Windows EXE
 
 on:
   push:
@@ -13,7 +13,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -21,45 +21,42 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+          if (Test-Path requirements.txt) {
+            pip install -r requirements.txt
+          }
+          # PyInstaller y runtime Qt
+          pip install pyinstaller PySide6 qdarkstyle
 
-      - name: Verify assets (icon optional)
-        shell: bash
+      - name: Verify assets exist
+        shell: pwsh
         run: |
-          if [ -f "assets/app.ico" ]; then
-            echo "Found assets/app.ico"
-          else
-            echo "WARNING: assets/app.ico not found. EXE will use default icon."
-          fi
+          if (!(Test-Path "assets/app.ico")) { throw "Falta assets/app.ico" }
+          Write-Host "Assets:"
+          Get-ChildItem assets
 
-      - name: Build (PyInstaller onedir windowed)
-        shell: bash
+      - name: Build EXE (onedir, windowed, con assets)
+        shell: pwsh
         run: >
           python -m PyInstaller app.py
-          --noconfirm
-          --clean
-          --onedir
-          --windowed
+          --noconfirm --clean --onedir --windowed
           --name WhiteBoard
           --icon assets/app.ico
           --collect-submodules PySide6
           --hidden-import PySide6.QtMultimedia
+          --add-data "assets/app.ico;assets"
+          --add-data "assets/app.png;assets"
 
-      - name: Copy repo assets into dist (optional at runtime)
-        shell: bash
+      - name: List dist
+        shell: pwsh
         run: |
-          if [ -d "assets" ]; then
-            mkdir -p dist/WhiteBoard/assets
-            cp -r assets/* dist/WhiteBoard/assets/ || true
-          fi
+          Get-ChildItem -Recurse dist\WhiteBoard
 
-      - name: Upload artifact (folder)
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: WhiteBoard_onedir_Windows
-          path: dist/WhiteBoard/**
-          if-no-files-found: error
+          name: WhiteBoard-windows
+          path: dist/WhiteBoard/
+
 
 
 
