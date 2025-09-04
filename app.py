@@ -75,7 +75,6 @@ def _runtime_base_dir() -> str:
     return os.path.dirname(os.path.abspath(sys.argv[0]))
 
 def find_runtime_asset(rel_path: str) -> Optional[str]:
-    # 1) datos en roaming; 2) carpeta assets junto al exe
     candidates = [
         os.path.join(ASSETS_DIR, rel_path),
         os.path.join(_runtime_base_dir(), "assets", rel_path),
@@ -86,9 +85,6 @@ def find_runtime_asset(rel_path: str) -> Optional[str]:
     return None
 
 def _build_multisize_icon_from(path: str) -> QIcon:
-    """
-    QIcon con varias resoluciones (16/24/32/48/256) para que Windows use la adecuada.
-    """
     base = QImage(path)
     if base.isNull():
         return QIcon(path)
@@ -102,22 +98,17 @@ def set_app_icon(app: QApplication):
     ico_path = find_runtime_asset("app.ico")
     png_path = find_runtime_asset("app.png")
     if ico_path:
-        icon = _build_multisize_icon_from(ico_path)
-        app.setWindowIcon(icon)
+        app.setWindowIcon(_build_multisize_icon_from(ico_path))
     elif png_path:
-        icon = _build_multisize_icon_from(png_path)
-        app.setWindowIcon(icon)
+        app.setWindowIcon(_build_multisize_icon_from(png_path))
 
 # ------------------ Modelo ------------------
 @dataclass
 class NotePayload:
-    # IDEA
-    title: str = ""
-    subtitle: str = ""
-    # TEXTO
-    body: str = ""
+    title: str = ""     # IDEA
+    subtitle: str = ""  # IDEA
+    body: str = ""      # TEXTO
     font_pt: int = 12
-    # MEDIA
     audio_asset: str = ""
     image_asset: str = ""
     volume: int = 100
@@ -317,7 +308,7 @@ class IdeaNoteItem(BaseNoteItem):
         f1.setPointSize(12)
         f1.setBold(True)
         self.title_item.setFont(f1)
-               self.title_item.setDefaultTextColor(QColor("white"))
+        self.title_item.setDefaultTextColor(QColor("white"))
         self.title_item.setTextInteractionFlags(Qt.TextEditorInteraction)
         self.title_item.setPos(8, 8)
         self.title_item.document().contentsChanged.connect(self._commit_and_dirty)
@@ -1137,11 +1128,9 @@ class MainWindow(QMainWindow):
             self.status.showMessage(f"Error guardando: {e}", 3000)
 
 def main():
-    # Asegura pixmaps HiDPI (mejor para iconos pequeños)
     QGuiApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
-
     app = QApplication(sys.argv)
-    set_app_icon(app)  # icono global
+    set_app_icon(app)
     if QDARKSTYLE_OK:
         try:
             app.setStyleSheet(qdarkstyle.load_stylesheet(qt_api="pyside6"))
@@ -1153,13 +1142,3 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-
-
-
-
-
-
-
-
