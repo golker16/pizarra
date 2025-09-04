@@ -672,7 +672,7 @@ class BoardView(QGraphicsView):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("WhiteBoard — PySide6")
+        self.setWindowTitle(" ")
         self.resize(1280, 800)
 
         # Icono por ventana (además del global)
