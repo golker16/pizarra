@@ -87,12 +87,11 @@ def find_runtime_asset(rel_path: str) -> Optional[str]:
 
 def _build_multisize_icon_from(path: str) -> QIcon:
     """
-    Crea un QIcon con varias resoluciones (16/24/32/48/256).
-    Funciona con .ico o .png de origen.
+    QIcon con varias resoluciones (16/24/32/48/256) para que Windows use la adecuada.
     """
     base = QImage(path)
     if base.isNull():
-        return QIcon(path)  # que Qt intente lo suyo
+        return QIcon(path)
     icon = QIcon()
     for sz in (16, 24, 32, 48, 256):
         scaled = QPixmap.fromImage(base.scaled(sz, sz, Qt.KeepAspectRatio, Qt.SmoothTransformation))
@@ -271,7 +270,7 @@ class BaseNoteItem(QObject, QGraphicsRectItem):
 
     def hoverLeaveEvent(self, e):
         self._hovering = False
-               self.update()
+        self.update()
         super().hoverLeaveEvent(e)
 
     def itemChange(self, change, value):
@@ -318,7 +317,7 @@ class IdeaNoteItem(BaseNoteItem):
         f1.setPointSize(12)
         f1.setBold(True)
         self.title_item.setFont(f1)
-        self.title_item.setDefaultTextColor(QColor("white"))
+               self.title_item.setDefaultTextColor(QColor("white"))
         self.title_item.setTextInteractionFlags(Qt.TextEditorInteraction)
         self.title_item.setPos(8, 8)
         self.title_item.document().contentsChanged.connect(self._commit_and_dirty)
@@ -1154,6 +1153,7 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 
 
